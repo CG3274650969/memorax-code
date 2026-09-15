@@ -1,4 +1,4 @@
-export const DSH_TESTED_VERSIONS = Object.freeze(["0.1.0-rc.6"]);
+export const DSH_TESTED_VERSIONS = Object.freeze(["0.1.0-rc.6", "0.1.2-rc.1"]);
 
 const DSH_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const DSH_VERSION_MAX_LENGTH = 128;

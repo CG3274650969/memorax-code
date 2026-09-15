@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -10,6 +11,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -582,6 +584,93 @@ test("does not accept a stale headless bundle declaration without an installed m
   });
   assert.equal(activation.ok, false);
   assert.equal(activation.reason, "managed_profiles_not_installed");
+});
+
+test("uses the selected DSH installation before the legacy Profile module tree", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "memorax-code-dsh-install-anchor-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const adapterRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const dshHome = join(root, "dsh-home");
+  const profilesRoot = join(dshHome, "profiles");
+  const installRoot = join(root, "native", "node_modules", "@deepseek-ai", "dsh");
+  const entrypoint = join(installRoot, "lib", "bin.js");
+  const headlessRoot = join(installRoot, "node_modules", ...HEADLESS_BUNDLE_NAME.split("/"));
+  mkdirSync(dirname(entrypoint), { recursive: true });
+  writeJson(join(installRoot, "package.json"), {
+    name: "@deepseek-ai/dsh", version: "0.1.2-rc.1", bin: { dsh: "lib/bin.js" },
+  });
+  writeFileSync(entrypoint, "#!/usr/bin/env node\n");
+  chmodSync(entrypoint, 0o755);
+  mkdirSync(headlessRoot, { recursive: true });
+  writeJson(join(headlessRoot, "package.json"), { name: HEADLESS_BUNDLE_NAME, main: "index.js" });
+  writeFileSync(join(headlessRoot, "index.js"), "module.exports = {};\n");
+  writeProfile(profilesRoot, "web", ["@deepseek-ai/dsh-base"]);
+  const binRoot = join(root, "bin");
+  mkdirSync(binRoot);
+  // Exercise the same symlink resolution as a POSIX npm global command.
+  if (process.platform !== "win32") symlinkSync(entrypoint, join(binRoot, "dsh"));
+  const calls = [];
+  const options = {
+    adapterRoot, dshHome, memoraxCodeHome: join(root, "state"),
+    dshCommand: process.platform === "win32" ? entrypoint : "dsh",
+    env: { PATH: binRoot },
+    runDsh(invocation) {
+      const args = dshArguments(invocation);
+      if (args[0] === "--version") return { status: 0, stdout: "0.1.2-rc.1\n" };
+      assert.deepEqual([args[0], args[1], args[3]], ["plugin", "--profile", "add"]);
+      calls.push(args[2]);
+      const profileRoot = join(profilesRoot, args[2]);
+      if (!existsSync(join(profileRoot, "package.json"))) {
+        writeProfile(profilesRoot, args[2], []);
+        const manifest = JSON.parse(readFileSync(join(profileRoot, "package.json"), "utf8"));
+        manifest.dsh.profile.bundles.push(HEADLESS_BUNDLE_NAME);
+        writeJson(join(profileRoot, "package.json"), manifest);
+      }
+      const runtimeRoot = args[4].slice("file:".length);
+      const packageName = JSON.parse(readFileSync(join(runtimeRoot, "package.json"), "utf8")).name;
+      const installedRoot = join(profileRoot, "node_modules", ...packageName.split("/"));
+      mkdirSync(dirname(installedRoot), { recursive: true });
+      cpSync(runtimeRoot, installedRoot, { recursive: true });
+      const manifest = JSON.parse(readFileSync(join(profileRoot, "package.json"), "utf8"));
+      manifest.dependencies[packageName] = args[4];
+      manifest.dsh.profile.bundles.push(packageName);
+      writeJson(join(profileRoot, "package.json"), manifest);
+      return { status: 0 };
+    },
+  };
+  const result = await withDshPluginLifecycleLock(options, (lifecycle) => {
+    const installed = lifecycle.ensureInstalled({ enabled: false });
+    assert.equal(installed.ok, true, JSON.stringify(installed));
+    assert.equal(lifecycle.status().installed, true);
+    assert.equal(lifecycle.activate().ok, true);
+    return installed;
+  });
+  assert.deepEqual(result.installedProfiles, ["headless", "web"]);
+  assert.equal(existsSync(join(profilesRoot, "node_modules")), false);
+  assert.equal(collectDshAdapterStatus(options).enabled, true);
+  await withDshPluginLifecycleLock(options, (lifecycle) => {
+    assert.equal(lifecycle.ensureInstalled().ok, true);
+  });
+  assert.deepEqual(calls, ["headless", "web"]);
+
+  // A valid legacy copy must not mask a broken copy selected by modern DSH.
+  const legacyRoot = join(profilesRoot, "node_modules", ...HEADLESS_BUNDLE_NAME.split("/"));
+  mkdirSync(dirname(legacyRoot), { recursive: true });
+  cpSync(headlessRoot, legacyRoot, { recursive: true });
+  rmSync(join(headlessRoot, "index.js"));
+  assert.equal(collectDshAdapterStatus(options).installed, false);
+  await withDshPluginLifecycleLock(options, (lifecycle) => {
+    assert.equal(lifecycle.status().installed, false);
+    assert.equal(lifecycle.activate().reason, "managed_profiles_not_installed");
+  });
+
+  // Older DSH installations expose built-ins only through this shared tree.
+  rmSync(headlessRoot, { recursive: true });
+  assert.equal(collectDshAdapterStatus(options).installed, true);
+  await withDshPluginLifecycleLock(options, (lifecycle) => {
+    assert.equal(lifecycle.status().installed, true);
+    assert.equal(lifecycle.activate().ok, true);
+  });
 });
 
 test("migrates the managed legacy package identity and restores it if reconciliation fails", async (t) => {
@@ -1167,4 +1256,14 @@ function writeProfile(profilesRoot, name, bundles = []) {
     });
     writeFileSync(join(headlessRoot, "index.js"), "module.exports = {};\n");
   }
+}
+
+function dshArguments(invocation) {
+  if (invocation.command !== process.execPath) return invocation.args;
+  const args = invocation.args;
+  if (args[0] === "--import") {
+    assert.match(args[1], /^data:text\/javascript;base64,/);
+    return args.slice(3);
+  }
+  return args.slice(1);
 }

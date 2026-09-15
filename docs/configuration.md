@@ -259,7 +259,11 @@ plugin command to initialize the standard `headless` Profile when that name is
 available. Stop and uninstall remove the MemoraX Code adapter from this Profile
 but preserve the Profile and its native data.
 
-MemoraX Code is tested with DSH `0.1.0-rc.6`. Other valid semantic versions are
+For npm-installed DSH, built-in bundle checks resolve from the selected DSH
+installation first, then the Profile module tree for legacy installations.
+A first session is not required to create `profiles/node_modules` before setup.
+
+MemoraX Code is tested with DSH `0.1.0-rc.6` and `0.1.2-rc.1`. Other valid semantic versions are
 accepted but appear as untested in status output; compatibility is not
 guaranteed. An unavailable or malformed `dsh --version` result fails Profile
 reconciliation when a Profile exists. Run `memorax-code start --clients dsh`

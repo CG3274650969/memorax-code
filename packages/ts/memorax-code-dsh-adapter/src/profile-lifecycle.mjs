@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  accessSync,
+  constants,
   copyFileSync,
   existsSync,
   lstatSync,
@@ -13,7 +15,7 @@ import {
 } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -149,7 +151,9 @@ export function collectDshAdapterStatus(options = {}) {
     const managed = Boolean(state) && !stateProblem;
     const installed = profiles.length > 0
       && profiles.every((profile) => profile.managed && profile.exists && profile.installed)
-      && managedProfilesHaveInstalledHeadlessBundle(discoveredProfiles, managedNames);
+      && managedProfilesHaveInstalledHeadlessBundle(
+        discoveredProfiles, managedNames, options, paths, state?.dshCommand,
+      );
     const base = {
       integration: "plugin",
       managed,
@@ -304,7 +308,9 @@ function readDshPluginStatusUnlocked(paths, options) {
   );
   const installed = state.profiles.length > 0
     && managedProfiles.every((profile) => profile.installed)
-    && managedProfilesHaveInstalledHeadlessBundle(profiles, new Set(state.profiles));
+    && managedProfilesHaveInstalledHeadlessBundle(
+      profiles, new Set(state.profiles), options, paths, state.dshCommand,
+    );
   return {
     ok: true,
     action: "dsh-plugin-status",
@@ -380,7 +386,10 @@ function ensureDshPluginInstalledUnlocked(paths, options) {
     };
   }
 
-  let workerProfileName = profiles.find(profileHasInstalledHeadlessBundle)?.name;
+  const installAnchor = resolveDshInstallAnchor(dshCommand, options, paths);
+  let workerProfileName = profiles.find((profile) => (
+    profileHasInstalledHeadlessBundle(profile, installAnchor)
+  ))?.name;
   let targetProfiles = profiles;
   let initializeWorkerProfile = false;
   if (!workerProfileName) {
@@ -481,7 +490,7 @@ function ensureDshPluginInstalledUnlocked(paths, options) {
         || current.status !== "valid"
         || !profileHasInstalledAdapter(current.profile, runtimeBundleRoot, pendingState)
         || (profile.name === workerProfileName
-          && !profileHasInstalledHeadlessBundle(current.profile))) {
+          && !profileHasInstalledHeadlessBundle(current.profile, installAnchor))) {
         failedProfiles.push(profileMutationFailure(
           profile.name,
           result,
@@ -515,7 +524,7 @@ function ensureDshPluginInstalledUnlocked(paths, options) {
     if (current.status === "valid"
       && profileHasInstalledAdapter(current.profile, runtimeBundleRoot, pendingState)
       && (profile.name !== workerProfileName
-        || profileHasInstalledHeadlessBundle(current.profile))) {
+        || profileHasInstalledHeadlessBundle(current.profile, installAnchor))) {
       installedProfiles.push(profile.name);
     } else {
       failedProfiles.push(profileMutationFailure(
@@ -540,7 +549,7 @@ function ensureDshPluginInstalledUnlocked(paths, options) {
     }
   }
   if (!finalProfiles.some((profile) => (
-    profile.status === "valid" && profileHasInstalledHeadlessBundle(profile.profile)
+    profile.status === "valid" && profileHasInstalledHeadlessBundle(profile.profile, installAnchor)
   )) && !failedProfiles.some((failure) => failure.name === workerProfileName)) {
     failedProfiles.push({ name: workerProfileName, reason: "headless_profile_not_capable" });
   }
@@ -728,7 +737,9 @@ function activateDshPluginInstallationUnlocked(paths, options) {
     || state.profiles.some((name) => (
       !profileHasInstalledAdapter(profileByName.get(name), state.runtimeBundleRoot, state)
     ))
-    || !managedProfilesHaveInstalledHeadlessBundle(profiles, new Set(state.profiles))) {
+    || !managedProfilesHaveInstalledHeadlessBundle(
+      profiles, new Set(state.profiles), options, paths, state.dshCommand,
+    )) {
     return {
       ok: false,
       action: "dsh-plugin-activate",
@@ -1522,22 +1533,71 @@ function profileHasAdapter(profile, packageName = ADAPTER_PACKAGE_NAME) {
     && profile.bundles.includes(packageName));
 }
 
-function managedProfilesHaveInstalledHeadlessBundle(profiles, managedNames) {
+function managedProfilesHaveInstalledHeadlessBundle(profiles, managedNames, options, paths, command) {
+  const installAnchor = resolveDshInstallAnchor(command, options, paths);
   return profiles.some((profile) => (
-    managedNames.has(profile.name) && profileHasInstalledHeadlessBundle(profile)
+    managedNames.has(profile.name) && profileHasInstalledHeadlessBundle(profile, installAnchor)
   ));
 }
 
-function profileHasInstalledHeadlessBundle(profile) {
-  if (!profile?.bundles.includes(HEADLESS_BUNDLE_NAME)) return false;
+function resolveDshInstallAnchor(command, options, paths) {
+  if (!command) return undefined;
   try {
-    // DSH exposes built-in bundles through the Profile's shared resolution tree.
-    const requireFromProfile = createRequire(join(profile.path, "package.json"));
-    readFileSync(requireFromProfile.resolve(HEADLESS_BUNDLE_NAME), "utf8");
-    return true;
+    const [launcher, ...args] = buildDshCommand(command, [], {
+      nodePath: options.windowsCliResolution?.nodePath,
+    });
+    const invocation = resolveWindowsCliInvocation(launcher, args, {
+      ...options.windowsCliResolution,
+      env: paths.env,
+    });
+    let entrypoint = invocation.args[0] ?? invocation.command;
+    if (!isAbsolute(entrypoint)) {
+      entrypoint = (paths.env.PATH ?? "").split(delimiter)
+        .map((directory) => resolve(paths.adapterRoot, directory, entrypoint))
+        .find((candidate) => {
+          try {
+            accessSync(candidate, constants.X_OK);
+            return true;
+          } catch {
+            return false;
+          }
+        });
+    }
+    if (!entrypoint) return undefined;
+    // Follow the selected CLI's npm symlink or Windows shim, not this adapter's
+    // dependencies: DSH resolves built-in bundles from its own installation.
+    for (let root = dirname(realpathSync(entrypoint)); ; root = dirname(root)) {
+      const manifestPath = join(root, "package.json");
+      if (existsSync(manifestPath)
+        && JSON.parse(readFileSync(manifestPath, "utf8")).name === DSH_PACKAGE_NAME) {
+        return manifestPath;
+      }
+      if (dirname(root) === root) return undefined;
+    }
   } catch {
-    return false;
+    // Older or packaged CLIs may expose only the Profile's shared module tree.
+    return undefined;
   }
+}
+
+function profileHasInstalledHeadlessBundle(profile, installAnchor) {
+  if (!profile?.bundles.includes(HEADLESS_BUNDLE_NAME)) return false;
+  // Modern DSH uses installation-first resolution before a session has created
+  // profiles/node_modules. Keep the Profile tree as the legacy fallback.
+  for (const anchor of [installAnchor, join(profile.path, "package.json")].filter(Boolean)) {
+    const requireFromAnchor = createRequire(anchor);
+    if (!(requireFromAnchor.resolve.paths(HEADLESS_BUNDLE_NAME) ?? []).some((directory) => (
+      existsSync(join(directory, HEADLESS_BUNDLE_NAME, "package.json"))
+    ))) continue;
+    try {
+      readFileSync(requireFromAnchor.resolve(HEADLESS_BUNDLE_NAME), "utf8");
+      return true;
+    } catch {
+      // A broken selected bundle must not be hidden by a different legacy copy.
+      return false;
+    }
+  }
+  return false;
 }
 
 function profileHasInstalledAdapter(
