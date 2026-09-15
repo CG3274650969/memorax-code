@@ -4,6 +4,7 @@ Start with the user-facing diagnostics:
 
 ```sh
 memorax-code status
+memorax-code logs --diagnostics
 memorax-cli status
 memorax-code-codex doctor
 memorax-code-claude doctor
@@ -32,6 +33,35 @@ does not prove that its Hook has run: `hook-runtime=unverified` and
 `hook-runtime=observed` distinguish those states. Trae may report a configured
 integration while still requiring its one-time Global Hooks activation; follow
 the activation guidance printed by `start`, `restart`, or `status`.
+
+## Read and share a diagnostic
+
+Start with `memorax-code status`. Its **Recent failures** section is retained
+history, separate from current Backend and client readiness. A past error can
+remain after recovery; a healthy current status is not changed by that record.
+
+`memorax-code logs --diagnostics` shows the latest five failures with their IDs,
+versions, clients, failure stages, error codes, impact, and next steps. To show
+more records or retrieve the ID from an installation error or status summary:
+
+```sh
+memorax-code logs --diagnostics --limit 10
+memorax-code logs --id <diagnostic-id>
+memorax-code logs --id <diagnostic-id> --json
+```
+
+Use the same `--home DIR` or `MEMORAX_CODE_HOME` as the failed operation.
+These queries work even when the Backend is stopped or its connection record
+cannot be read. Copy the relevant diagnostic output after reviewing it, along
+with the action that failed and reproduction steps. This projection excludes
+unknown fields and does not include raw Backend logs or client conversation
+content. Plain `memorax-code logs` still shows Backend logs; review those
+separately before sharing.
+
+A missing ID can mean the wrong state home or that retention removed it. If a
+query reports skipped records or a read error, retain that error code too: the
+history may be incomplete. Querying does not repair or delete files. No retained
+failure record does not establish successful Hook execution or remote acceptance.
 
 ## Package installed, but setup did not start
 
@@ -370,7 +400,31 @@ must not be disabled by
 ## Hook ran, but automatic writeback is missing
 
 `hook-runtime=observed` confirms that a managed Hook loaded. It does not prove
-that a completed turn reached MemoraX. Check each stage in order:
+that a completed turn reached MemoraX. First run `memorax-code logs --diagnostics`
+and use `memorax-code logs --id <diagnostic-id>` for a relevant entry. Known Hook
+and automatic-writeback failures are saved even when Debug and trace are off. Match the timestamp,
+client, operation, and failure stage; the record supplies a fixed error code,
+known reason or system/HTTP code, impact, and recovery guidance.
+
+- Hook runtime or Backend delivery failures mean the memory Hook could not
+  complete its work; a delivery timeout can leave Backend acceptance unknown.
+- Native-content, correlation, or workspace-scope failures mean the completed
+  QA was not accepted into automatic writeback.
+- A final Add failure describes the failed upload after its existing retry
+  policy finishes. Earlier chunks may already have been accepted; a timeout
+  does not prove the request was rejected by MemoraX.
+
+A Hook that starts the Backend reuses diagnostics already saved by the start
+command. If that command cannot start, times out, is terminated, or cannot return
+a usable saved diagnostic, the Hook records the known recovery failure itself.
+
+These failures do not insert messages into the conversation or change Hook exit
+behavior. Normal buffering, duplicates, disabled writeback, and interrupted or
+empty turns are not errors. No record is created by a Hook that never runs, and
+records can be absent if local storage is unavailable or retention has removed
+them. Share the relevant reviewed diagnostic; do not attach native history.
+
+If no diagnostic explains the symptom, check each stage in order:
 
 1. Run `memorax-cli status` from the same project and check automatic writeback,
    credentials, and workspace scope. Compare the Backend and client's actual
@@ -403,8 +457,9 @@ that a completed turn reached MemoraX. Check each stage in order:
    available to Search. Use the [connection and scope checks](#memorax-search-add-or-scope-fails)
    for credential, network, and repository failures.
 
-If normal status is insufficient, temporarily enable Backend diagnostic logs
-and reproduce one completed turn. In Bash or Zsh:
+If status and the saved failure records are insufficient, detailed per-event
+Debug logs can help distinguish normal buffering and skips. Temporarily enable
+Backend diagnostic logs and reproduce one completed turn. In Bash or Zsh:
 
 ```sh
 MEMORAX_CODE_BACKEND_DEBUG_REQUESTS=true memorax-code restart
@@ -813,8 +868,9 @@ memorax-cli status --json
 
 For a client-specific failure, also collect the affected client's diagnostic
 from the start of this guide with `--json`.
-For a Search/Add, Backend lifecycle, client deployment, setup, or update failure,
-include its diagnostic ID and the reviewed diagnostic file, if saved. Structured command
+For a Search/Add, Backend lifecycle, client deployment, setup, update, Hook, or
+automatic-writeback failure, include its diagnostic ID and the reviewed
+output from `memorax-code logs --id <diagnostic-id>`, if saved. Structured command
 output may contain query, workspace, process, or raw Backend error fields that
 are excluded from the diagnostic record; review it separately before sharing.
 Include the MemoraX Code version, operating system, affected client,

@@ -688,6 +688,51 @@ Add text, response bodies, credentials, and raw local paths. See
 [Search/Add recovery](troubleshooting.md#memorax-search-add-or-scope-fails) for
 interpreting the output or a diagnostic-storage failure.
 
+## Diagnostic inspection
+
+`memorax-code status` adds the latest three valid retained failure records to its
+human summary and JSON `diagnostics` field. Historical failures do not indicate
+whether a problem is still active and never change the current status result or
+exit code. Failure to read history is reported separately.
+
+`memorax-code logs --diagnostics` lists the latest five valid records;
+`--limit N` accepts 1 through 1000. `memorax-code logs --id <diagnostic-id>`
+reads one retained record by its exact ID. `--id` and `--limit` each select
+diagnostic mode without requiring `--diagnostics`, but cannot be combined.
+Add `--json` for the structured projection. Plain `memorax-code logs` continues
+to show Backend logs.
+
+Queries use `--home DIR`, then `MEMORAX_CODE_HOME`, then the default home.
+They do not require a running Backend or enabled Debug/trace. Lists inspect at
+most the newest 1000 candidate records within 30 days; ID lookup can find an
+older record if write-time retention has not removed it. Inspection creates no
+files and never performs retention cleanup. Unreadable or invalid records are
+reported separately from valid results. An empty directory is a successful empty
+query. Directory-read or ID-lookup failure returns exit code 1; invalid query
+arguments return 2. A list that skips invalid or unreadable files still returns
+0 with `skipped` and the first `errorCode` (and known `systemCode`), so inspect
+these fields before treating its results as complete. See [reading and sharing a diagnostic](troubleshooting.md#read-and-share-a-diagnostic).
+
+## Hook and automatic-writeback diagnostics
+
+Known Hook execution, Backend delivery, completed-turn validation, and final
+automatic Add failures attempt to save content-free records in the same
+[diagnostic directory](#default-searchadd-diagnostics), with the same permissions
+and retention. Debug and trace do not need to be enabled. Hook reporting remains
+silent and preserves existing return values, exit behavior, and conversation
+context. Diagnostic-storage failure cannot turn a successful Hook or writeback
+into a failure.
+
+The Hook sender records transport and non-success HTTP responses; the Backend
+records known failures after a valid command reaches its native-content or
+writeback handling. Automatic Add records a terminal failure after the existing
+retry policy finishes, rather than recording every retry. Disabled writeback,
+normal buffering, duplicate handling, interruption, and empty eligible content
+do not create failure records. There is no persistent cross-process failure
+deduplication state. Records describe observed failures; their absence does not
+prove that a Hook ran or that MemoraX accepted a turn. See
+[background failure recovery](troubleshooting.md#hook-ran-but-automatic-writeback-is-missing).
+
 ## Backend lifecycle diagnostics
 
 Failed Backend reports from `memorax-code start`, `stop`, and `restart` use
