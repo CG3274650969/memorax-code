@@ -274,18 +274,19 @@ function readBackendPidState(path) {
 
 function runLifecycleCommand(options) {
   const spawn = options.spawnSyncImpl ?? spawnSync;
+  const timeoutMs = positiveInteger(options.commandTimeoutMs, PACKAGE_TRANSITION_COMMAND_TIMEOUT_MS);
   const result = spawn(process.execPath, [options.memoraxCodeBin, ...options.args], {
     cwd: join(options.memoraxCodeHome, "runtime", "install"),
     encoding: "utf8",
     env: { ...process.env, ...options.env, MEMORAX_CODE_HOME: options.memoraxCodeHome },
     stdio: ["ignore", "pipe", "pipe"],
-    timeout: positiveInteger(options.commandTimeoutMs, PACKAGE_TRANSITION_COMMAND_TIMEOUT_MS),
+    timeout: timeoutMs,
     killSignal: "SIGKILL",
     windowsHide: true,
   });
   if (result.error || result.signal || result.status !== 0) {
     const detail = result.error?.code === "ETIMEDOUT"
-      ? `${options.label} timed out after ${positiveInteger(options.commandTimeoutMs, PACKAGE_TRANSITION_COMMAND_TIMEOUT_MS)} ms`
+      ? `${options.label} timed out after ${timeoutMs} ms`
       : result.error?.message
       ?? (result.signal ? `${options.label} exited from signal ${result.signal}` : `${options.label} exited with status ${result.status ?? "unknown"}`);
     throw transitionError("PACKAGE_TRANSITION_COMMAND_FAILED", detail, result);

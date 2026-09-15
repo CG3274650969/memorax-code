@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   chmod,
   cp,
@@ -15,7 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const adapterCommonRoot = join(packageRoot, "..", "..", "ts", "memorax-code-adapter-common", "src");
@@ -92,6 +92,31 @@ test("a live Backend is retired before replacement and restored once afterward",
 
     assert.equal((await runEntry(fixture, "postinstall")).code, 0);
     assert.equal((await readCalls(fixture)).length, 3);
+
+    const transition = await import(pathToFileURL(join(fixture.root, "lib", "package-transition.mjs")).href);
+    for (const commandTimeoutMs of [undefined, 75_000]) {
+      await writeFile(fixture.pidPath, JSON.stringify({ pid: process.pid }));
+      const budgets = [];
+      const options = {
+        memoraxCodeHome: fixture.home,
+        memoraxCodeBin: join(fixture.root, "bin", "memorax-code.mjs"),
+        packageVersion: "9.8.7-test",
+        env: fixture.env,
+        commandTimeoutMs,
+        spawnSyncImpl: (command, args, spawnOptions) => {
+          budgets.push([args[1], spawnOptions.timeout]);
+          return spawnSync(command, args, spawnOptions);
+        },
+      };
+      transition.runNpmPreinstallPackageTransition(options);
+      await transition.runNpmPostinstallPackageTransition(options);
+      assert.deepEqual(budgets, [
+        ["stop", commandTimeoutMs ?? 45_000],
+        ["start", commandTimeoutMs ?? 45_000],
+        ["status", commandTimeoutMs ?? 45_000],
+      ]);
+      assert.equal(await pathExists(fixture.transitionPath), false);
+    }
   } finally {
     await fixture.cleanup();
   }
@@ -272,7 +297,7 @@ test("start failures retain retired state and do not run status", async (t) => {
 });
 
 test("restoration reuses Backend and client diagnostic IDs without leaking child output", async (t) => {
-  for (const mode of ["backend-diagnostic", "client-diagnostic"]) {
+  for (const mode of ["backend-diagnostic", "backend-exited-diagnostic", "client-diagnostic"]) {
     await t.test(mode, async () => {
       const fixture = await createFixture({ transitionText: recordText(), startMode: mode });
       try {
@@ -483,11 +508,11 @@ appendFileSync(${JSON.stringify(logPath)}, JSON.stringify({
   packageReplacement: process.env.MEMORAX_CODE_PACKAGE_REPLACEMENT === "1",
 }) + "\\n");
 const mode = process.env["MEMORAX_CODE_TEST_" + command.toUpperCase() + "_MODE"] ?? "ok";
-if (mode === "backend-diagnostic" || mode === "client-diagnostic") {
+if (mode === "backend-diagnostic" || mode === "backend-exited-diagnostic" || mode === "client-diagnostic") {
   const client = mode === "client-diagnostic";
   const failure = client
     ? { errorCode: "CLIENT_SKILL_PUBLISH_FAILED", stage: "skill-publish", systemCode: "EPERM", processState: "running" }
-    : { errorCode: "BACKEND_HEALTH_NOT_READY", stage: "health", systemCode: "ECONNREFUSED", processState: "stopped" };
+    : { errorCode: mode === "backend-exited-diagnostic" ? "BACKEND_EXITED_BEFORE_READY" : "BACKEND_HEALTH_NOT_READY", stage: "health", systemCode: "ECONNREFUSED", processState: "stopped" };
   const diagnostic = writeDiagnosticRecord(home, { source: "memorax-code", operation: client ? "client.start" : "backend.start", ...failure });
   const displayFailure = { ...failure, error: "private-child-error-canary", userAction: "private-child-action-canary" };
   console.log(JSON.stringify(client

@@ -189,9 +189,10 @@ test("automatic setup reuses a child diagnostic and deduplicates IPC messages", 
 test("offline npm lifecycle relay preserves original failures and ignores successful install diagnostics", async (t) => {
   const { diagnostics, root, memoraxCodeHome } = await fixture(t);
   const { runNpmCommand } = await import(pathToFileURL(join(root, "lib", "npm-invocation.mjs")).href);
-  for (const [phase, exitCode] of [["preinstall", 7], ["postinstall", 0]]) {
-    const prefix = join(root, phase);
-    const home = join(memoraxCodeHome, phase);
+  for (const [phase, exitCode] of [["preinstall", 7], ["postinstall", 7], ["postinstall", 0]]) {
+    const prefix = join(root, `${phase}-${exitCode}`);
+    const home = join(memoraxCodeHome, `${phase}-${exitCode}`);
+    const backendExited = phase === "postinstall" && exitCode !== 0;
     await mkdir(prefix);
     await writeFile(join(prefix, "package.json"), JSON.stringify({
       name: "memorax-offline-diagnostic-fixture", version: "1.0.0", private: true,
@@ -200,7 +201,15 @@ test("offline npm lifecycle relay preserves original failures and ignores succes
     await writeFile(join(prefix, "lifecycle.mjs"), [
       'import { appendFileSync, readFileSync } from "node:fs";',
       'import { UpdateFailure, reportUpdateFailure } from "../lib/update-diagnostics.mjs";',
-      'const result = reportUpdateFailure(new UpdateFailure("PACKAGE_TRANSITION_COMMAND_FAILED", "retire", { systemCode: "EACCES" }), {',
+      'import { writeDiagnosticRecord } from "../lib/memorax-code-adapter-common/src/diagnostic-record.mjs";',
+      'const backendFailure = { errorCode: "BACKEND_EXITED_BEFORE_READY", stage: "health", processState: "stopped" };',
+      backendExited
+        ? 'const diagnostic = writeDiagnosticRecord(process.env.MEMORAX_CODE_HOME, { source: "memorax-code", operation: "backend.start", ...backendFailure });'
+        : '',
+      backendExited
+        ? 'const failure = new UpdateFailure("PACKAGE_TRANSITION_COMMAND_FAILED", "restore", { commandResult: { stdout: JSON.stringify({ backend: { ok: false }, failure: backendFailure, diagnostic }) } });'
+        : 'const failure = new UpdateFailure("PACKAGE_TRANSITION_COMMAND_FAILED", "retire", { systemCode: "EACCES" });',
+      'reportUpdateFailure(failure, {',
       '  home: process.env.MEMORAX_CODE_HOME, operation: "install.retire", version: "1.0.0",',
       '});',
       'const path = process.env.MEMORAX_CODE_UPDATE_DIAGNOSTIC_PATH;',
@@ -221,7 +230,8 @@ test("offline npm lifecycle relay preserves original failures and ignores succes
     assert.equal(result.exitCode, exitCode === 0 ? 0 : 7);
     if (exitCode !== 0) {
       assert.equal(failure.children.length, 1);
-      assert.equal(failure.children[0].fields.systemCode, "EACCES");
+      assert.equal(failure.children[0].fields.errorCode, backendExited ? "BACKEND_EXITED_BEFORE_READY" : "PACKAGE_TRANSITION_COMMAND_FAILED");
+      assert.equal(failure.children[0].fields.systemCode, backendExited ? undefined : "EACCES");
       const output = [];
       diagnostics.reportUpdateFailure(failure, { home, write: (line) => output.push(line) });
       assert.equal(output.filter((line) => line.startsWith("Diagnostic:")).length, 1);
