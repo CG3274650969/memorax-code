@@ -18,11 +18,14 @@ const root = await mkdtemp(join(tmpdir(), "memorax-code-lifecycle-diagnostics-e2
 const userHome = join(root, "user");
 const workspace = join(root, "private-workspace-canary");
 const healthyHome = join(root, "healthy-state");
+const logHome = join(root, "blocked-backend-log");
 const malformedPid = "{private-pid-record-canary\n";
 const backendToken = "synthetic-backend-token-canary-for-installed-lifecycle";
 const healthResponseCanary = "private-health-response-body-canary";
 let healthyPort;
 let healthyCleanupNeeded = false;
+let logPort;
+let logCleanupNeeded = false;
 
 try {
   await Promise.all([userHome, workspace, join(root, "tmp")]
@@ -68,12 +71,20 @@ try {
   assert.equal(await readFile(pidPath, "utf8"), malformedPid);
   await assert.rejects(readFile(join(dirname(pidPath), "managed-clients.json")), { code: "ENOENT" });
 
-  const logHome = join(root, "blocked-backend-log");
-  await mkdir(join(logHome, "runtime", "backend", "backend.log"), { recursive: true });
-  const logFailure = await jsonFailure("start", logHome, "BACKEND_SERVICE_PREPARE_FAILED", "prepare_runtime");
+  const logDirectory = join(logHome, "runtime", "backend", "backend.log");
+  const logSentinel = join(logDirectory, "sentinel.txt");
+  await mkdir(logDirectory, { recursive: true });
+  await writeFile(logSentinel, "preserve blocked log directory contents\n");
+  logPort = await freePort();
+  logCleanupNeeded = true;
+  const logFailure = await jsonFailure("start", logHome, "BACKEND_SERVICE_PREPARE_FAILED", "prepare_runtime", { port: logPort });
   assert.equal(logFailure.failure.systemCode, "EISDIR");
   assert.equal(logFailure.failure.processState, "not-started");
+  assert.equal((await stat(logDirectory)).isDirectory(), true);
+  assert.equal(await readFile(logSentinel, "utf8"), "preserve blocked log directory contents\n");
   await assert.rejects(readFile(join(logHome, "runtime", "backend", "backend.pid.json")), { code: "ENOENT" });
+  await assertPortAvailable(logPort);
+  logCleanupNeeded = false;
 
   const healthHome = join(root, "rejected-backend-health");
   const healthServer = createHttpServer((_request, response) => {
@@ -85,9 +96,10 @@ try {
     healthServer.listen(0, "127.0.0.1", done);
   });
   try {
-    const health = await jsonFailure("start", healthHome, "BACKEND_HEALTH_NOT_READY", "health", {
+    const health = await jsonFailure("start", healthHome, "BACKEND_EXITED_BEFORE_READY", "health", {
       port: healthServer.address().port,
     });
+    assert.equal(health.failure.error, "Backend process exited before becoming ready.");
     assert.equal(health.failure.failureReason, "http_error");
     assert.equal(health.failure.httpStatus, 503);
     assert.equal(health.failure.processState, "stopped");
@@ -145,9 +157,23 @@ try {
   console.log("Installed lifecycle CLI diagnostics E2E passed (debug off, clients none, local only).");
 } finally {
   let cleanupConfirmed = true;
+  if (logCleanupNeeded) {
+    // Retain the failed fixture and preserve the original assertion if cleanup fails.
+    cleanupConfirmed = false;
+    try {
+      const cleanup = await runCli("stop", logHome, { port: logPort });
+      assert.equal(cleanup.code, 0, "Blocked-log fixture Backend stop failed");
+      const pid = JSON.parse(cleanup.stdout).backend?.state?.pid;
+      if (pid) await assertProcessExited(pid);
+      await assert.rejects(readFile(join(logHome, "runtime", "backend", "backend.pid.json")), { code: "ENOENT" });
+      await assertPortAvailable(logPort);
+    } catch {
+      console.error("Blocked-log E2E cleanup could not confirm Backend shutdown; original failure and fixture state were retained.");
+    }
+  }
   if (healthyCleanupNeeded) {
     const cleanup = await runCli("stop", healthyHome, { port: healthyPort });
-    cleanupConfirmed = cleanup.code === 0;
+    cleanupConfirmed = cleanup.code === 0 && cleanupConfirmed;
     if (!cleanupConfirmed) console.error("Lifecycle E2E cleanup could not confirm Backend shutdown; fixture state was retained.");
   }
   if (cleanupConfirmed) await rm(root, { recursive: true, force: true });

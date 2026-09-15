@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
-import { closeSync, existsSync, openSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -89,6 +89,20 @@ function logPath(options: BackendServiceOptions): string {
   const configured = backendEnv("LOG");
   if (configured) return configured;
   return join(serviceDir(options), "backend.log");
+}
+
+function openBackendLog(path: string): number {
+  const fd = openSync(path, "a");
+  try {
+    // Windows may open a directory for append; validate the descriptor before handing it to the child.
+    if (fstatSync(fd).isDirectory()) {
+      throw Object.assign(new Error("Backend log path is a directory"), { code: "EISDIR" });
+    }
+    return fd;
+  } catch (error) {
+    closeSync(fd);
+    throw error;
+  }
 }
 
 export function readBackendServiceRecordState(
@@ -210,8 +224,8 @@ export async function startBackendService(
   let errFd: number;
   try {
     ensurePrivateDirectory(serviceDir(options), { durableBoundary: backendServiceHome(options) });
-    outFd = openSync(logs, "a");
-    errFd = openSync(logs, "a");
+    outFd = openBackendLog(logs);
+    errFd = openBackendLog(logs);
   } catch (error) {
     if (outFd !== undefined) closeSync(outFd);
     return {
@@ -311,15 +325,19 @@ export async function startBackendService(
     instanceId,
     backendServiceHome(options),
     runtime,
+    child,
   );
   if (!healthy.ok) {
-    const processCleanup = await stopFailedBackendStart(state.pid, options.timeoutMs ?? 5000, runtime);
+    // A known exited child must not authorize a signal to its potentially reused PID.
+    const processCleanup = healthy.processExited
+      ? { processState: "stopped" as const }
+      : await stopFailedBackendStart(state.pid, options.timeoutMs ?? 5000, runtime);
     const failure: BackendServiceResult = {
       ok: false,
       action: "start",
       state,
       error: `backend did not become healthy at ${url}`,
-      ...backendServiceFailureFields({ code: healthy.systemCode }, "BACKEND_HEALTH_NOT_READY", "health"),
+      ...backendServiceFailureFields({ code: healthy.systemCode }, healthy.processExited ? "BACKEND_EXITED_BEFORE_READY" : "BACKEND_HEALTH_NOT_READY", "health"),
       failureReason: healthy.failureReason,
       ...(healthy.httpStatus === undefined ? {} : { httpStatus: healthy.httpStatus }),
       ...processCleanup,
@@ -565,7 +583,8 @@ export function backendServiceLogs(options: BackendServiceOptions = {}, bytes = 
 
 type BackendHealthFailure = {
   ok: false;
-  failureReason: BackendServiceFailureReason;
+  processExited?: true;
+  failureReason?: BackendServiceFailureReason;
   httpStatus?: number;
   systemCode?: string;
 };
@@ -576,11 +595,13 @@ async function waitForHealth(
   instanceId: string,
   expectedSessionHome: string,
   runtime: BackendServiceRuntime,
+  child: ChildProcess,
 ): Promise<{ ok: true } | BackendHealthFailure> {
-  let failure: BackendHealthFailure = { ok: false, failureReason: "deadline" };
+  let failure: BackendHealthFailure | undefined;
   const budgetMs = Number.isFinite(timeoutMs) ? Math.max(0, Math.trunc(timeoutMs)) : 0;
   const deadline = Date.now() + budgetMs;
   while (Date.now() < deadline) {
+    if (child.exitCode != null || child.signalCode != null) return { ...failure, ok: false, processExited: true };
     const remainingMs = deadline - Date.now();
     try {
       const health = await readHealthWithTimeout(
@@ -591,7 +612,11 @@ async function waitForHealth(
       const failureReason = health.ok
         ? healthResponseFailureReason(health.body, instanceId, expectedSessionHome)
         : "http_error";
-      if (!failureReason) return { ok: true };
+      if (!failureReason) {
+        return child.exitCode != null || child.signalCode != null
+          ? { ...failure, ok: false, processExited: true }
+          : { ok: true };
+      }
       failure = {
         ok: false,
         failureReason,
@@ -607,10 +632,13 @@ async function waitForHealth(
       };
       // Retry until timeout; the child process may still be starting.
     }
+    if (child.exitCode != null || child.signalCode != null) return { ...failure, ok: false, processExited: true };
     const retryBudgetMs = deadline - Date.now();
     if (retryBudgetMs > 0) await sleep(Math.min(100, retryBudgetMs));
   }
-  return failure;
+  return child.exitCode != null || child.signalCode != null
+    ? { ...failure, ok: false, processExited: true }
+    : failure ?? { ok: false, failureReason: "deadline" };
 }
 
 function healthResponseFailureReason(

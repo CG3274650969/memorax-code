@@ -19,6 +19,7 @@ import {
 } from "../../../dist/lifecycle/backend/service.js";
 import { removeBackendServiceStateIfOwnedAtPath } from "../../../dist/lifecycle/backend/record.js";
 import { backendServiceFailureFields } from "../../../dist/lifecycle/backend/result.js";
+import { diagnoseLifecycleReport, lifecycleDiagnosticLines } from "../../../dist/lifecycle/cli-diagnostics.js";
 import { backendShutdownRequestPath } from "../../../dist/lifecycle/backend/shutdown-request.js";
 
 function successfulProcessProbe(commandLine) {
@@ -244,7 +245,10 @@ test("failed health startup terminates the spawned process and removes PID state
   });
   const port = await listen(occupied);
   try {
-    const result = await startBackendService({ home, port, timeoutMs: 200 });
+    const result = await startBackendService({ home, port, timeoutMs: 200 }, {
+      // Keep the child alive so this exercises deadline cleanup, not early exit.
+      spawnProcess: (_command, _args, options) => spawn(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], options),
+    });
     assert.equal(result.ok, false);
     assert.match(result.error, /did not become healthy/);
     assert.equal(result.errorCode, "BACKEND_HEALTH_NOT_READY");
@@ -255,6 +259,91 @@ test("failed health startup terminates the spawned process and removes PID state
     assert.equal(readBackendServiceState({ home }), undefined);
   } finally {
     await new Promise((resolve) => occupied.close(resolve));
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("startup expires the default five-second health deadline and cleans up its process", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "memorax-code-startup-deadline-"));
+  const now = Date.now;
+  let elapsedMs = 0;
+  const clock = t.mock.method(Date, "now", () => now() + elapsedMs);
+  let alive = true;
+  let probes = 0;
+  let terminated = false;
+  try {
+    const result = await startBackendService({ home }, {
+      spawnProcess: () => {
+        const child = new EventEmitter();
+        child.pid = 4242;
+        child.unref = () => undefined;
+        process.nextTick(() => child.emit("spawn"));
+        return child;
+      },
+      isProcessAlive: () => alive,
+      terminateProcessTree: () => { terminated = true; alive = false; return true; },
+      fetch: async () => {
+        probes += 1;
+        // Advance only the deadline clock; no real slow process is needed.
+        elapsedMs += 6_000;
+        throw Object.assign(new Error("still starting"), { code: "ECONNREFUSED" });
+      },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.errorCode, "BACKEND_HEALTH_NOT_READY");
+    assert.equal(result.systemCode, "ECONNREFUSED");
+    assert.equal(probes, 1);
+    assert.equal(terminated, true);
+    assert.equal(result.processState, "stopped");
+    assert.equal(readBackendServiceState({ home }), undefined);
+  } finally {
+    clock.mock.restore();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("startup reports an exited child promptly without terminating its former PID", async () => {
+  const home = await mkdtemp(join(tmpdir(), "memorax-code-exited-startup-"));
+  const child = new EventEmitter();
+  child.pid = 4242;
+  child.exitCode = null;
+  child.signalCode = null;
+  child.unref = () => undefined;
+  let probes = 0;
+  let terminated = false;
+  try {
+    const result = await startBackendService({ home, timeoutMs: 50 }, {
+      spawnProcess: () => {
+        process.nextTick(() => child.emit("spawn"));
+        return child;
+      },
+      isProcessAlive: () => false,
+      terminateProcessTree: () => { terminated = true; return true; },
+      fetch: async () => {
+        probes += 1;
+        // Exit during the final retry delay, when the health budget also expires.
+        setImmediate(() => { child.exitCode = 1; });
+        return new Response("private-startup-failure", { status: 503 });
+      },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.errorCode, "BACKEND_EXITED_BEFORE_READY");
+    assert.equal(result.stage, "health");
+    assert.equal(result.failureReason, "http_error");
+    assert.equal(result.httpStatus, 503);
+    assert.equal(result.systemCode, undefined);
+    assert.equal(result.processState, "stopped");
+    assert.equal(probes, 1);
+    assert.equal(terminated, false);
+    assert.equal(readBackendServiceState({ home }), undefined);
+    assert.doesNotMatch(JSON.stringify(result), /private-startup-failure/);
+    const diagnosed = diagnoseLifecycleReport({ ok: false, action: "start", backend: result }, { home });
+    assert.equal(diagnosed.failure.error, "Backend process exited before becoming ready.");
+    assert.match(lifecycleDiagnosticLines(diagnosed).join("\n"), /BACKEND_EXITED_BEFORE_READY/);
+    const record = JSON.parse(await readFile(diagnosed.diagnostic.path, "utf8"));
+    assert.equal(record.errorCode, "BACKEND_EXITED_BEFORE_READY");
+    assert.equal(record.processState, "stopped");
+  } finally {
     await rm(home, { recursive: true, force: true });
   }
 });
@@ -810,8 +899,8 @@ test("failed startup retains PID state when cleanup fails or the PID remains ali
           {
             terminateProcessTree,
             isProcessAlive: () => true,
-            spawnProcess: (...args) => {
-              child = spawn(...args);
+            spawnProcess: (_command, _args, options) => {
+              child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], options);
               childClosed = new Promise((resolve) => child.once("close", resolve));
               return child;
             },
@@ -865,13 +954,14 @@ test("Backend service failure fields keep only allowlisted machine evidence", ()
 });
 
 test("startup identifies runtime preparation and PID, token, or connection persistence failures", async (t) => {
-  for (const [stage, filename, errorCode] of [
-    ["prepare_runtime", "backend.log", "BACKEND_SERVICE_PREPARE_FAILED"],
+  for (const [stage, filename, errorCode, directoryOpen] of [
+    ["prepare_runtime", "backend.log", "BACKEND_SERVICE_PREPARE_FAILED", 1],
+    ["prepare_runtime", "backend.log", "BACKEND_SERVICE_PREPARE_FAILED", 2],
     ["persist_pid", "backend.pid.json", "BACKEND_SERVICE_STATE_WRITE_FAILED"],
     ["persist_token", "backend-token.json", "BACKEND_TOKEN_WRITE_FAILED"],
     ["persist_connection", "backend-connection.json", "BACKEND_CONNECTION_WRITE_FAILED"],
   ]) {
-    await t.test(stage, async (t) => {
+    await t.test(directoryOpen ? `${stage}: log descriptor ${directoryOpen}` : stage, async (t) => {
       const home = await mkdtemp(join(tmpdir(), "memorax-code-startup-persistence-diagnostic-"));
       const directory = join(home, "runtime", "backend");
       const blockedPath = join(directory, filename);
@@ -879,8 +969,25 @@ test("startup identifies runtime preparation and PID, token, or connection persi
       let spawned = false;
       let instanceId;
       let renameMock;
+      let openMock;
+      const logDescriptors = [];
       try {
-        if (stage === "prepare_runtime") await mkdir(blockedPath, { recursive: true });
+        if (stage === "prepare_runtime") {
+          await mkdir(blockedPath, { recursive: true });
+          await writeFile(join(blockedPath, "keep.txt"), "existing directory content");
+          const open = fs.openSync;
+          let logOpen = 0;
+          openMock = t.mock.method(fs, "openSync", (path, flags, ...args) => {
+            if (path !== blockedPath) return open(path, flags, ...args);
+            // Windows can open a directory for append; exercise that path on every platform.
+            const fd = ++logOpen === directoryOpen
+              ? open(path, "r", ...args)
+              : open(join(directory, "regular.log"), flags, ...args);
+            logDescriptors.push(fd);
+            return fd;
+          });
+          syncBuiltinESMExports();
+        }
         if (stage === "persist_token") {
           const rename = fs.renameSync;
           renameMock = t.mock.method(fs, "renameSync", (source, target) => {
@@ -921,10 +1028,21 @@ test("startup identifies runtime preparation and PID, token, or connection persi
         assert.equal(spawned, stage !== "prepare_runtime");
         assert.equal(alive, false);
         assert.equal(result.cleanupErrorCode, undefined);
+        if (stage === "prepare_runtime") {
+          assert.equal(result.systemCode, "EISDIR");
+          assert.equal(readBackendServiceState({ home }), undefined);
+          assert.equal(await readFile(join(blockedPath, "keep.txt"), "utf8"), "existing directory content");
+          assert.ok(logDescriptors.length > 0);
+          for (const fd of logDescriptors) assert.throws(() => fs.fstatSync(fd), { code: "EBADF" });
+        }
         if (stage === "persist_token" || stage === "persist_connection") assert.equal(readBackendServiceState({ home }), undefined);
       } finally {
         renameMock?.mock.restore();
+        openMock?.mock.restore();
         syncBuiltinESMExports();
+        for (const fd of logDescriptors) {
+          try { fs.closeSync(fd); } catch (error) { if (error.code !== "EBADF") throw error; }
+        }
         await rm(home, { recursive: true, force: true });
       }
     });
