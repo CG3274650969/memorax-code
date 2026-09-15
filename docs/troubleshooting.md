@@ -699,7 +699,7 @@ runtime supplied a valid semantic version. A `dsh_profile_runtime_stale` result
 means that Profile-linked package is invalid or its original package cache is
 no longer available. Repair or relaunch DSH itself, then rerun the MemoraX Code
 start command. MemoraX Code never invokes `npx` or installs or updates DSH. The
-tested baseline is `0.1.0-rc.6`; another valid version is allowed but marked
+tested versions are `0.1.0-rc.6` and `0.1.2-rc.1`; another valid version is allowed but marked
 untested. A `pnpm_not_found` result means DSH's native Profile plugin manager
 could not find `pnpm` on `PATH`; install `pnpm`, then rerun the start command.
 
