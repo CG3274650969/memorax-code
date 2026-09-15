@@ -29,6 +29,49 @@ test("extracts hidden user query and completed assistant branch", () => {
   assert.equal(result.turn.assistantTimestamp, Date.parse("2026-09-07T00:05:00.000Z"));
 });
 
+test("prefers native original input over expanded Skill content", () => {
+  const prompt = "/memorax-code explain <user_query>literal tags</user_query>";
+  const user = { id: "u1", type: "message", role: "user", sessionId, timestamp: 1_700_000_000_000, content: [
+    { type: "output_text", text: "not user input", providerData: { content: "ignore this block" } },
+    { type: "input_text", text: "<command-name>/memorax-code</command-name>\n# MemoraX Code\nExpanded instructions",
+      providerData: { content: prompt } },
+  ] };
+  const assistant = { id: "a1", type: "message", role: "assistant", parentId: "u1",
+    status: "completed", timestamp: 1_700_000_060_000,
+    content: [{ type: "output_text", text: "done", providerData: { content: "not the reply" } }] };
+  const input = { sessionId, turnId: provisionalTurnId(prompt) };
+  const completed = codeBuddyTranscriptTurnFromJsonLines([user, assistant].map(JSON.stringify).join("\n"), input);
+  assert.equal(completed.ok, true);
+  assert.equal(completed.turn.userPrompt, prompt);
+  assert.equal(completed.turn.assistantReply, "done");
+  assert.equal(completed.turn.userTimestamp, user.timestamp);
+  assert.equal(completed.turn.assistantTimestamp, assistant.timestamp);
+
+  assistant.status = "incomplete";
+  const transcript = [user, assistant].map(JSON.stringify).join("\n");
+  assert.deepEqual(codeBuddyTranscriptTurnFromJsonLines(transcript, input), { ok: false, reason: "assistant_message_missing" });
+  const interrupted = codeBuddyInterruptedTranscriptTurnFromJsonLines(transcript, input);
+  assert.equal(interrupted.ok, true);
+  assert.equal(interrupted.turn.userPrompt, prompt);
+  assert.equal(interrupted.turn.assistantReply, "done");
+});
+
+test("does not fall back to displayed text when native original input is invalid or mismatched", () => {
+  const prompt = "/memorax-code remember this";
+  for (const original of ["another prompt", "", "   ", null, 42, [prompt], { text: prompt }]) {
+    const transcript = [
+      { id: "u1", type: "message", role: "user", sessionId, content: [
+        { type: "input_text", text: prompt, providerData: { content: original } },
+      ] },
+      { id: "a1", type: "message", role: "assistant", parentId: "u1", status: "completed",
+        content: [{ type: "output_text", text: "must not persist" }] },
+    ].map(JSON.stringify).join("\n");
+    assert.deepEqual(codeBuddyTranscriptTurnFromJsonLines(transcript, {
+      sessionId, turnId: provisionalTurnId(prompt),
+    }), { ok: false, reason: "user_prompt_missing" }, JSON.stringify(original));
+  }
+});
+
 test("preserves completed and interrupted replies through a long tool chain", () => {
   const records = [
     { id: "u1", type: "message", role: "user", sessionId, content: [{ type: "input_text", text: "long task" }] },
@@ -235,13 +278,16 @@ test("fails closed on malformed JSONL instead of using a partial transcript", ()
 });
 
 test("uses UTF-8 byte boundaries when a repeated prompt follows non-ASCII history", () => {
-  for (const newline of ["\n", "\r\n"]) {
+  for (const [newline, originalInput] of [["\n", false], ["\r\n", false], ["\n", true], ["\r\n", true]]) {
     const first = [
       { id: "u1", type: "message", role: "user", sessionId, content: [{ type: "input_text", text: "重复" }] },
       { id: "a1", type: "message", role: "assistant", parentId: "u1", status: "completed", content: [{ type: "output_text", text: "第一轮" }] },
     ].map(JSON.stringify).join(newline) + newline;
     const second = [
-      { id: "u2", type: "message", role: "user", sessionId, content: [{ type: "input_text", text: "重复" }] },
+      { id: "u2", type: "message", role: "user", sessionId, content: [{ type: "input_text",
+        text: originalInput ? "<command-name>/memorax-code</command-name>expanded" : "重复",
+        ...(originalInput ? { providerData: { content: "重复" } } : {}),
+      }] },
       { id: "a2", type: "message", role: "assistant", parentId: "u2", status: "completed", content: [{ type: "output_text", text: "第二轮" }] },
     ].map(JSON.stringify).join(newline) + newline;
     const boundary = Buffer.byteLength(first, "utf8");
