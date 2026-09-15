@@ -23,6 +23,7 @@ test("single npm package layout accepts declared paths and rejects unknown trees
   assert.equal(isAllowedNpmPackPath("lib/node-version.mjs"), true);
   assert.equal(isAllowedNpmPackPath("lib/dsh-plugin-install.mjs"), true);
   assert.equal(isAllowedNpmPackPath("lib/package-transition.mjs"), true);
+  assert.equal(isAllowedNpmPackPath("lib/package-update.mjs"), true);
   assert.equal(isAllowedNpmPackPath("lib/resolve-claude-command.mjs"), true);
   assert.equal(isAllowedNpmPackPath("lib/vscode-extension-command.mjs"), true);
   assert.equal(isAllowedNpmPackPath("lib/setup-memory-preferences.mjs"), true);

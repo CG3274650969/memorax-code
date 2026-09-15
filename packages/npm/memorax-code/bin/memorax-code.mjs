@@ -7,8 +7,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { runAutomaticUpdate } from "../lib/automatic-update.mjs";
 import { stagePackagedClientHookRuntime } from "../lib/client-hook-runtime.mjs";
 import { unsupportedNodeVersionMessage } from "../lib/node-version.mjs";
-import { runNpmCommand } from "../lib/npm-invocation.mjs";
-import { reportUpdateFailure, runUpdateInstallWithDiagnostics } from "../lib/update-diagnostics.mjs";
+import { installPackageUpdate, withPackageUpdateLock } from "../lib/package-update.mjs";
+import { reportUpdateFailure } from "../lib/update-diagnostics.mjs";
 import { ensureNpmPackageRuntimeEnv, runBackendEntrypoint } from "../lib/run-entrypoint.mjs";
 import { readSetupApiKey } from "../lib/setup-api-key-input.mjs";
 import { ensureWindowsNpmGlobalPath } from "../lib/windows-user-path.mjs";
@@ -213,13 +213,11 @@ async function runUpdateCommand(args) {
   let npmResult;
   let npmFailure;
   try {
-    ({ result: npmResult, failure: npmFailure } = await runUpdateInstallWithDiagnostics((installEnv) => runNpmCommand(npmArgs, {
-      env: {
-        ...installEnv,
-        MEMORAX_CODE_HOME: memoraxCodeHome,
-      },
-      stdio: "inherit",
-    })));
+    npmResult = await installPackageUpdate({
+      memoraxCodeHome, packageRoot: packageRoot(), packageName: pkg.name, npmArgs,
+      env: process.env, stdio: "inherit",
+    });
+    npmFailure = npmResult.failure;
   } catch (error) {
     reportUpdateFailure(error, { home: memoraxCodeHome, version: pkg.version, code: "UPDATE_INSTALL_FAILED", stage: "install" });
     return 1;
@@ -239,14 +237,20 @@ async function runUpdateCommand(args) {
 }
 
 async function runUpdateRecoveryCommand(memoraxCodeHome) {
+  let stage = "install_lock";
   try {
     // Resume restoration under the transition lock; another npm preinstall must
     // still reject pending state because it may belong to an active installation.
     const { runNpmPostinstallPackageTransition } = await import("../lib/package-transition.mjs");
-    const result = await runNpmPostinstallPackageTransition({
-      memoraxCodeHome,
-      memoraxCodeBin: join(packageRoot(), "bin", "memorax-code.mjs"),
-      recover: true,
+    const result = await withPackageUpdateLock(memoraxCodeHome, async () => {
+      stage = "restore";
+      const restored = await runNpmPostinstallPackageTransition({
+        memoraxCodeHome,
+        memoraxCodeBin: join(packageRoot(), "bin", "memorax-code.mjs"),
+        recover: true,
+      });
+      stage = "install_lock";
+      return restored;
     });
     if (result.disposition === "restored") {
       console.error("memorax-code update: installed package restored and verified; run `memorax-code setup` with the same --home or MEMORAX_CODE_HOME to reconcile clients and verify Hook changes");
@@ -255,7 +259,7 @@ async function runUpdateRecoveryCommand(memoraxCodeHome) {
     }
     return 0;
   } catch (error) {
-    reportUpdateFailure(error, { home: memoraxCodeHome, operation: "update.recover", code: "PACKAGE_TRANSITION_FAILED", stage: "restore" });
+    reportUpdateFailure(error, { home: memoraxCodeHome, operation: "update.recover", code: "PACKAGE_TRANSITION_FAILED", stage });
     return 1;
   }
 }

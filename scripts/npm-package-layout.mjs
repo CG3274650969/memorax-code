@@ -44,6 +44,7 @@ const rootLibFiles = new Set([
   "lib/automatic-update.mjs",
   "lib/npm-invocation.mjs",
   "lib/package-transition.mjs",
+  "lib/package-update.mjs",
   "lib/client-hook-runtime.mjs",
   "lib/dsh-plugin-install.mjs",
   "lib/node-version.mjs",
@@ -101,6 +102,11 @@ export function requiredNpmPackagePaths(manifest) {
     "bin/memorax-code-plugin-postinstall.mjs",
     "bin/memorax-code-setup.mjs",
     "lib/run-entrypoint.mjs",
+    ...(manifest.memoraxCode?.updateRecoveryProtocol === 1 ? [
+      "lib/package-update.mjs",
+      "lib/memorax-code-adapter-common/src/package-recovery.mjs",
+      "lib/memorax-code-backend/dist/lifecycle/orchestrator.js",
+    ] : []),
     "lib/memorax-code-backend/package.json",
     ...["memorax-code", "memorax-cli", "server", "service-entrypoint", "repo-memory", "user-profile"]
       .map((name) => `lib/memorax-code-backend/dist/${name}.js`),

@@ -173,7 +173,7 @@ test("explicit update recovery resumes a failed DSH transition and consumes it o
     assert.equal(recovery.code, 0, recovery.stderr);
     assert.match(recovery.stderr, /restored and verified/);
     assert.deepEqual((await readCalls(fixture)).map((call) => call.command), [
-      "stop", "start", "status", "start", "status", "start", "status",
+      "stop", "start", "status", "status", "start", "status", "start", "status",
     ]);
     assert.equal(await pathExists(fixture.transitionPath), false);
     assert.equal(await pathExists(fixture.completionPath), false);
@@ -182,7 +182,165 @@ test("explicit update recovery resumes a failed DSH transition and consumes it o
     const repeated = await runEntry(fixture, "recover");
     assert.equal(repeated.code, 0, repeated.stderr);
     assert.match(repeated.stderr, /no pending package transition/);
-    assert.equal((await readCalls(fixture)).length, 7);
+    assert.equal((await readCalls(fixture)).length, 8);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("manual update restores its failed transition while preserving failure and permits the next update", async () => {
+  const fixture = await createFixture({ publicUpdate: true, npmMode: "restore-failure", withDshState: true, statusMode: "fail-once" });
+  try {
+    const failed = await runEntry(fixture, "update");
+    assert.equal(failed.code, 23, failed.stderr);
+    assert.match(failed.stderr, /restored and verified/);
+    assert.equal(await pathExists(fixture.transitionPath), false);
+    const records = await readDiagnostics(fixture);
+    const result = records.find((record) => record.operation === "update" && record.errorCode === "UPDATE_INSTALL_FAILED");
+    assert.equal(result.commandExitCode, 23);
+    assert.equal(result.causeStage, "verify");
+    assert.equal(records.find((record) => record.id === result.causeDiagnosticId).commandExitCode, 7);
+    assert.equal(result.recoveryStatus, "restored");
+    assert.match(result.impact, /update remains incomplete/);
+    assert.equal(await pathExists(join(fixture.home, "runtime", "install", "update-result.json")), false);
+    assert.deepEqual((await readCalls(fixture)).map((call) => call.command), ["stop", "start", "status", "start", "status"]);
+
+    fixture.env.MEMORAX_CODE_TEST_NPM_MODE = "success";
+    const next = await runEntry(fixture, "update");
+    assert.equal(next.code, 0, next.stderr);
+    assert.equal(await pathExists(fixture.transitionPath), false);
+    assert.equal((await readFile(fixture.npmLogPath, "utf8")).trim().split("\n").length, 2);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("failed same-attempt recovery keeps the original failure and retired record", async () => {
+  const fixture = await createFixture({ publicUpdate: true, npmMode: "restore-failure", withDshState: true, statusMode: "fail" });
+  try {
+    assert.equal((await runEntry(fixture, "update")).code, 23);
+    const retired = JSON.parse(await readFile(fixture.transitionPath, "utf8"));
+    const records = await readDiagnostics(fixture);
+    const result = records.find((record) => record.operation === "update" && record.errorCode === "UPDATE_INSTALL_FAILED");
+    assert.equal(retired.state, "retired");
+    assert.equal(result.causeStage, "verify");
+    assert.equal(records.find((record) => record.id === result.causeDiagnosticId).commandExitCode, 7);
+    assert.equal(result.recoveryStatus, "failed");
+    assert.equal(result.recoveryErrorCode, "PACKAGE_TRANSITION_COMMAND_FAILED");
+    assert.equal(result.recoveryStage, "verify");
+    assert.equal((await runEntry(fixture, "update")).code, 1);
+    assert.equal((await readFile(fixture.npmLogPath, "utf8")).trim().split("\n").length, 1);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("failed npm never restores a transition replaced by another update", async () => {
+  const fixture = await createFixture({ publicUpdate: true, npmMode: "foreign-transition", withDshState: true });
+  try {
+    assert.equal((await runEntry(fixture, "update")).code, 23);
+    const result = (await readDiagnostics(fixture)).find((record) => record.operation === "update");
+    assert.equal(result.recoveryStatus, "not-attempted");
+    assert.equal(JSON.parse(await readFile(fixture.transitionPath, "utf8")).transitionId, "123e4567-e89b-42d3-a456-426614174000");
+    assert.deepEqual((await readCalls(fixture)).map((call) => call.command), ["stop"]);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("failed replacement preserves retired state when npm restores an older package without recovery support", async () => {
+  const fixture = await createFixture({ publicUpdate: true, npmMode: "restore-failure", withDshState: true, statusMode: "fail-once" });
+  try {
+    const path = join(fixture.root, "package.json");
+    const metadata = JSON.parse(await readFile(path, "utf8"));
+    delete metadata.memoraxCode;
+    await writeFile(path, JSON.stringify(metadata));
+    assert.equal((await runEntry(fixture, "update")).code, 23);
+    const result = (await readDiagnostics(fixture)).find((record) => record.operation === "update");
+    assert.equal(result.recoveryStatus, "unsupported-package");
+    assert.equal(JSON.parse(await readFile(fixture.transitionPath, "utf8")).state, "retired");
+    assert.deepEqual((await readCalls(fixture)).map((call) => call.command), ["stop", "start", "status"]);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("pending transitions without PID authority reject npm and preinstall before any command", async () => {
+  const text = recordText();
+  const fixture = await createFixture({ publicUpdate: true, npmMode: "success", transitionText: text });
+  try {
+    assert.equal((await runEntry(fixture, "preinstall")).code, 1);
+    const update = await runEntry(fixture, "update");
+    assert.equal(update.code, 1);
+    assert.match(update.stderr, /update --recover/);
+    assert.equal(await pathExists(fixture.npmLogPath), false);
+    assert.equal(await pathExists(fixture.logPath), false);
+    assert.equal(await readFile(fixture.transitionPath, "utf8"), text);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("postinstall never restores another update's transition when npm carries an attempt identity", async () => {
+  const text = recordText();
+  const fixture = await createFixture({ transitionText: text });
+  fixture.env.MEMORAX_CODE_PACKAGE_TRANSITION_ID = "123e4567-e89b-42d3-a456-426614174001";
+  try {
+    const result = await runEntry(fixture, "postinstall");
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /PACKAGE_TRANSITION_REPLACED.*transition_read/);
+    assert.equal(await pathExists(fixture.logPath), false);
+    assert.equal(await readFile(fixture.transitionPath, "utf8"), text);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+
+test("a recovered restoration is recorded without repeating the successful start", async () => {
+  const fixture = await createFixture({ transitionText: recordText(), statusMode: "fail-once" });
+  try {
+    const result = await runEntry(fixture, "postinstall");
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(await pathExists(fixture.transitionPath), false);
+    assert.deepEqual((await readCalls(fixture)).map((call) => call.command), ["start", "status", "status"]);
+    const [record] = await readDiagnostics(fixture);
+    assert.equal(record.errorCode, "PACKAGE_TRANSITION_COMMAND_FAILED");
+    assert.equal(record.stage, "verify");
+    assert.equal(record.commandExitCode, 7);
+    assert.equal(record.recoveryStatus, "restored");
+    assert.match(result.stderr, /restored and verified/);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("postinstall retries only the failed stage and preserves the first failure across stages", async () => {
+  const fixture = await createFixture({ transitionText: recordText() });
+  try {
+    const api = await import(pathToFileURL(join(fixture.root, "lib", "package-transition.mjs")).href);
+    const calls = [];
+    await assert.rejects(api.runNpmPostinstallPackageTransition({
+      memoraxCodeHome: fixture.home,
+      memoraxCodeBin: join(fixture.root, "bin", "memorax-code.mjs"),
+      retryRestore: true,
+      spawnSyncImpl: (_command, args) => {
+        calls.push(args[1]);
+        if (calls.length === 1) return { status: null, error: { code: "ETIMEDOUT" }, stdout: "" };
+        if (args[1] === "status") return { status: 7, stdout: JSON.stringify({ ok: false }) };
+        return { status: 0, stdout: JSON.stringify({ ok: true }) };
+      },
+    }), (error) => {
+      assert.equal(error.code, "PACKAGE_TRANSITION_COMMAND_FAILED");
+      assert.equal(error.stage, "restore");
+      assert.equal(error.systemCode, "ETIMEDOUT");
+      assert.equal(error.recoveryStatus, "failed");
+      assert.equal(error.recovery.stage, "verify");
+      assert.equal(error.recovery.commandExitCode, 7);
+      return true;
+    });
+    assert.deepEqual(calls, ["start", "start", "status", "status"]);
+    assert.equal(JSON.parse(await readFile(fixture.transitionPath, "utf8")).state, "retired");
   } finally {
     await fixture.cleanup();
   }
@@ -288,7 +446,8 @@ test("start failures retain retired state and do not run status", async (t) => {
       try {
         assert.equal((await runEntry(fixture, "postinstall")).code, 1);
         assert.equal(JSON.parse(await readFile(fixture.transitionPath, "utf8")).state, "retired");
-        assert.deepEqual((await readCalls(fixture)).map((call) => call.command), ["start"]);
+        assert.deepEqual((await readCalls(fixture)).map((call) => call.command),
+          mode === "invalid-json" ? ["start"] : ["start", "start"]);
       } finally {
         await fixture.cleanup();
       }
@@ -304,13 +463,23 @@ test("restoration reuses Backend and client diagnostic IDs without leaking child
         const result = await runEntry(fixture, "postinstall");
         assert.equal(result.code, 1);
         const records = await readDiagnostics(fixture);
-        assert.equal(records.length, 1, "the transition must reuse the lifecycle diagnostic");
-        assert.equal(records[0].source, "memorax-code");
-        assert.ok(result.stderr.includes(`Diagnostic: ${records[0].id}`));
-        assert.ok(result.stderr.includes(records[0].errorCode));
-        assert.ok(result.stderr.includes(records[0].stage));
-        assert.ok(result.stderr.includes(records[0].systemCode));
-        assert.doesNotMatch(result.stderr, /private-child-error-canary|private-child-action-canary|PACKAGE_TRANSITION_COMMAND_FAILED/);
+        const originals = records.filter((record) => record.source === "memorax-code");
+        assert.equal(originals.length, mode === "client-diagnostic" ? 1 : 2);
+        for (const original of originals) {
+          assert.ok(result.stderr.includes(`Diagnostic: ${original.id}`));
+          assert.ok(result.stderr.includes(original.errorCode));
+          assert.ok(result.stderr.includes(original.stage));
+          assert.ok(result.stderr.includes(original.systemCode));
+        }
+        if (mode !== "client-diagnostic") {
+          const summary = records.find((record) => record.source === "memorax-code-update");
+          assert.equal(summary.recoveryStatus, "failed");
+          assert.ok(originals.some((record) => record.id === summary.causeDiagnosticId));
+          assert.ok(originals.some((record) => record.id === summary.recoveryDiagnosticId));
+        } else {
+          assert.equal(records.length, 1, "non-retryable client failures reuse the original diagnostic");
+        }
+        assert.doesNotMatch(result.stderr, /private-child-error-canary|private-child-action-canary/);
         assert.equal(JSON.parse(await readFile(fixture.transitionPath, "utf8")).state, "retired");
       } finally {
         await fixture.cleanup();
@@ -326,7 +495,8 @@ test("status failures retain retired state", async (t) => {
       try {
         assert.equal((await runEntry(fixture, "postinstall")).code, 1);
         assert.equal(JSON.parse(await readFile(fixture.transitionPath, "utf8")).state, "retired");
-        assert.deepEqual((await readCalls(fixture)).map((call) => call.command), ["start", "status"]);
+        assert.deepEqual((await readCalls(fixture)).map((call) => call.command),
+          mode === "invalid-json" ? ["start", "status"] : ["start", "status", "status"]);
       } finally {
         await fixture.cleanup();
       }
@@ -393,10 +563,12 @@ async function createFixture({
   timeoutMs,
   withDshState = false,
   publicUpdate = false,
+  npmMode,
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "memorax-code-package-transition-"));
   const home = join(root, "memorax-code-home");
   const logPath = join(root, "commands.jsonl");
+  const npmLogPath = join(root, "npm-calls.jsonl");
   const transitionPath = join(home, transitionRelativePath);
   const completionPath = join(home, "runtime", "setup", "setup-completion.json");
   const pidPath = join(home, pidRelativePath);
@@ -406,6 +578,7 @@ async function createFixture({
     "bin/memorax-code-plugin-postinstall.mjs",
     "lib/node-version.mjs",
     "lib/package-transition.mjs",
+    "lib/package-update.mjs",
     "lib/update-diagnostics.mjs",
     "lib/setup-diagnostics.mjs",
   ]) {
@@ -420,7 +593,7 @@ async function createFixture({
     }
     await writeFile(target, source);
   }
-  for (const relativePath of ["config-utils.mjs", "diagnostic-record.mjs", "deployment-failure.mjs", "runtime-record.mjs"]) {
+  for (const relativePath of ["config-utils.mjs", "diagnostic-record.mjs", "deployment-failure.mjs", "runtime-record.mjs", "package-recovery.mjs"]) {
     const target = join(root, "lib", "memorax-code-adapter-common", "src", relativePath);
     await mkdir(dirname(target), { recursive: true });
     await cp(join(adapterCommonRoot, relativePath), target);
@@ -448,9 +621,11 @@ async function createFixture({
       '',
     ].join("\n"));
   }
+  if (npmMode) await writeFile(join(root, "lib", "npm-invocation.mjs"), fakeNpmSource({ root, npmLogPath }));
   await writeFile(join(root, "package.json"), `${JSON.stringify({
     name: "@memorax/memorax-code-transition-test",
     version: "9.8.7-test",
+    memoraxCode: { updateRecoveryProtocol: 1 },
     type: "module",
   }, null, 2)}\n`);
   await writeFile(join(root, "bin", "memorax-code.mjs"), fakeCliSource({ logPath }), { mode: 0o755 });
@@ -475,16 +650,54 @@ async function createFixture({
     root,
     home,
     logPath,
+    npmLogPath,
     transitionPath,
     completionPath,
     pidPath,
     env: {
+      MEMORAX_CODE_TEST_NPM_MODE: npmMode,
       MEMORAX_CODE_TEST_STOP_MODE: stopMode,
       MEMORAX_CODE_TEST_START_MODE: startMode,
       MEMORAX_CODE_TEST_STATUS_MODE: statusMode,
     },
     cleanup: () => rm(root, { recursive: true, force: true }),
   };
+}
+
+function fakeNpmSource({ root, npmLogPath }) {
+  const runner = [
+    'import { readFileSync, writeFileSync } from "node:fs";',
+    'import { join } from "node:path";',
+    `import { runNpmPreinstallPackageTransition, runNpmPostinstallPackageTransition } from ${JSON.stringify(pathToFileURL(join(root, "lib", "package-transition.mjs")).href)};`,
+    `import { reportUpdateFailure } from ${JSON.stringify(pathToFileURL(join(root, "lib", "update-diagnostics.mjs")).href)};`,
+    `const options = { memoraxCodeHome: process.env.MEMORAX_CODE_HOME, env: process.env, memoraxCodeBin: ${JSON.stringify(join(root, "bin", "memorax-code.mjs"))}, packageVersion: "9.8.7-test" };`,
+    'runNpmPreinstallPackageTransition(options);',
+    'if (process.env.MEMORAX_CODE_TEST_NPM_MODE === "foreign-transition") {',
+    '  const path = join(options.memoraxCodeHome, "runtime", "install", "package-transition.json");',
+    '  const record = JSON.parse(readFileSync(path, "utf8"));',
+    '  writeFileSync(path, JSON.stringify({ ...record, transitionId: "123e4567-e89b-42d3-a456-426614174000" }));',
+    '  process.exit(23);',
+    '}',
+    'try { await runNpmPostinstallPackageTransition(options); }',
+    'catch (error) {',
+    '  reportUpdateFailure(error, { home: options.memoraxCodeHome, operation: "install.restore" });',
+    '  process.exit(23);',
+    '}',
+  ].join("\n");
+  return `import { appendFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+export async function runNpmCommand(args, { env, stdio }) {
+  appendFileSync(${JSON.stringify(npmLogPath)}, JSON.stringify(args) + "\\n");
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(runner)}], {
+    env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (stdio === "inherit") process.stderr.write(result.stderr ?? "");
+  return { exitCode: result.status ?? 1, signal: result.signal };
+}
+export function resolveNpmInvocation() { throw new Error("Unexpected registry lookup"); }
+export { resolveNpmInvocation as resolveNpmExecPath, resolveNpmInvocation as npmCommandCwd,
+  resolveNpmInvocation as waitForChildProcess };
+`;
 }
 
 function fakeCliSource({ logPath }) {
@@ -521,6 +734,7 @@ if (mode === "backend-diagnostic" || mode === "backend-exited-diagnostic" || mod
   process.exit(7);
 }
 if (mode === "hang") setInterval(() => {}, 1000);
+if (mode === "fail-once" && readFileSync(${JSON.stringify(logPath)}, "utf8").trim().split("\\n").map(JSON.parse).filter((call) => call.command === command).length === 1) { console.log(JSON.stringify({ ok: false })); process.exit(7); }
 if (mode === "fail") { console.log(JSON.stringify({ ok: false })); process.exit(7); }
 if (mode === "invalid-json") { console.log("not-json"); process.exit(0); }
 if (mode === "not-ok") { console.log(JSON.stringify({ ok: false })); process.exit(0); }
@@ -536,11 +750,12 @@ async function runEntry(fixture, entry, {
 } = {}) {
   const filename = entry === "preinstall"
     ? "memorax-code-npm-preinstall.mjs"
-    : entry === "recover" ? "update-cli.mjs" : "memorax-code-plugin-postinstall.mjs";
+    : entry === "recover" || entry === "update" ? "update-cli.mjs" : "memorax-code-plugin-postinstall.mjs";
   return await new Promise((resolve) => {
     const startedAt = Date.now();
     const child = spawn(process.execPath, [join(fixture.root, "bin", filename),
-      ...(entry === "recover" ? ["update", "--recover", "--home", memoraxCodeHome] : []),
+      ...(entry === "recover" || entry === "update"
+        ? ["update", ...(entry === "recover" ? ["--recover"] : []), "--home", memoraxCodeHome] : []),
     ], {
       cwd,
       env: {

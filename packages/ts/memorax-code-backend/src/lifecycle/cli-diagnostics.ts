@@ -35,6 +35,7 @@ export type ClientDeploymentDiagnostic = {
 
 const STAGE_MESSAGES: Record<string, string> = {
   lock: "Backend lifecycle authority could not be acquired.",
+  recovery_authority: "Package recovery permission could not be validated or saved.",
   resolve_connection: "Backend connection configuration could not be resolved.",
   read_state: "Backend process state could not be read or validated.",
   resolve_token: "Backend authentication configuration could not be used.",
@@ -259,6 +260,7 @@ function recoveryAction(code: string, stage: string, backend: BackendServiceResu
   if (backend.cleanupErrorCode) return "Run memorax-code status and inspect retained Backend state before retrying. Do not delete process state or force-stop an unverified process.";
   if (code === "BACKEND_LIFECYCLE_LOCK_TIMEOUT") return "Wait for the other lifecycle command to finish, then retry. If it persists, share this diagnostic.";
   if (stage === "lock" || stage === "prepare_runtime") return "Check that the Backend home and runtime directories are writable directories and that log storage is available.";
+  if (stage === "recovery_authority") return "Run memorax-code status. A later stop, restart or uninstall revokes automatic restoration; inspect the recovery record before explicitly running memorax-code update --recover.";
   if (stage === "resolve_connection") return "Check the Backend connection configuration and any reported authority record. Preserve the record for inspection before repairing it.";
   if (stage === "resolve_token") return "Check the Backend token and external-access configuration; inspect any reported token record before changing it.";
   if (stage === "read_state" || stage === "cleanup_pid") return "Inspect the reported Backend process record and verify process ownership before repairing or removing that record.";

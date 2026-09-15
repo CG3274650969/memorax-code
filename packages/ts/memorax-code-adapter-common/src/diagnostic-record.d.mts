@@ -24,6 +24,13 @@ export type DiagnosticRecordFields = {
   processState?: "not-started" | "stopped" | "running" | "unknown";
   cleanupErrorCode?: string;
   cleanupSystemCode?: string;
+  installedVersion?: string;
+  targetVersion?: string;
+  recoveryStatus?: "restored" | "failed" | "not-attempted" | "unsupported-package";
+  causeDiagnosticId?: string;
+  causeErrorCode?: string;
+  causeStage?: string;
+  recoveryDiagnosticId?: string;
   recoveryErrorCode?: string;
   recoveryStage?: string;
   recoverySystemCode?: string;

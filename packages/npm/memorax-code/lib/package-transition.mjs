@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+import { readPackageRecoveryRevision } from "./memorax-code-adapter-common/src/package-recovery.mjs";
 import { spawnSync } from "node:child_process";
 import { existsSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { updateFailure } from "./update-diagnostics.mjs";
+import { reportUpdateFailure, updateFailure } from "./update-diagnostics.mjs";
 import { withJsonFileLock, withJsonFileLockAsync } from "./memorax-code-adapter-common/src/config-utils.mjs";
 import {
   readJsonRuntimeRecord,
@@ -101,8 +103,15 @@ function preinstallPackageTransition(options, context) {
   const memoraxCodeHome = resolve(nonEmptyString(options.memoraxCodeHome) ?? defaultMemoraxCodeHome());
   const memoraxCodeBin = requiredString(options.memoraxCodeBin, "memoraxCodeBin");
   const packageVersion = requiredString(options.packageVersion, "packageVersion");
+  context.stage = "recovery_authority";
+  const stopRevision = nonEmptyString((options.env ?? process.env).MEMORAX_CODE_PACKAGE_STOP_REVISION)
+    ?? readPackageRecoveryRevision(memoraxCodeHome);
+  context.stage = "transition_read";
   const pidPath = backendPidPath(memoraxCodeHome);
   const dshStatePath = join(memoraxCodeHome, "adapters", "dsh", "state.json");
+  // Reject pending state here even without a PID, rather than only in postinstall.
+  // npm itself owns package-file replacement and rollback around these scripts.
+  assertNoPendingPackageTransition(memoraxCodeHome);
   if (!existsSync(pidPath) && !existsSync(dshStatePath)) return { disposition: "noop" };
 
   const transitionPath = packageTransitionPath(memoraxCodeHome);
@@ -121,7 +130,7 @@ function preinstallPackageTransition(options, context) {
     transition = {
       version: PACKAGE_TRANSITION_RECORD_VERSION,
       state: "retiring",
-      transitionId: randomUUID(),
+      transitionId: requestedTransitionId(options.env ?? process.env) ?? randomUUID(),
       startedAt: nowIso(options),
       sourceVersion: packageVersion,
     };
@@ -142,7 +151,9 @@ function preinstallPackageTransition(options, context) {
     memoraxCodeHome,
     memoraxCodeBin,
     args: ["stop", "--home", memoraxCodeHome, "--clients", "none", "--json"],
-    env: { ...options.env, MEMORAX_CODE_PACKAGE_REPLACEMENT: "1" },
+    env: { ...options.env, MEMORAX_CODE_PACKAGE_REPLACEMENT: "1",
+      MEMORAX_CODE_PACKAGE_TRANSITION_ID: transition?.transitionId ?? "",
+      MEMORAX_CODE_PACKAGE_STOP_REVISION: stopRevision },
     label: "memorax-code stop",
   });
   if (existsSync(pidPath)) {
@@ -181,7 +192,13 @@ export async function runNpmPostinstallPackageTransition(options = {}) {
   try {
     return await postinstallPackageTransition(options, context);
   } catch (error) {
-    throw updateFailure(error, "PACKAGE_TRANSITION_FAILED", context.stage, { lockStage: "transition_lock" });
+    const failure = updateFailure(error, "PACKAGE_TRANSITION_FAILED", context.stage, { lockStage: "transition_lock" });
+    if (context.firstFailure) {
+      if (context.firstFailure !== failure) context.firstFailure.recovery ??= failure;
+      if (context.retried) context.firstFailure.recoveryStatus = "failed";
+      throw context.firstFailure;
+    }
+    throw failure;
   }
 }
 
@@ -202,6 +219,9 @@ async function postinstallPackageTransition(options, context) {
       throw new PackageTransitionRecordError(reloaded, transitionPath);
     }
     const current = reloaded;
+    if (options.expectedTransitionId && current.record.transitionId !== options.expectedTransitionId) {
+      throw transitionError("PACKAGE_TRANSITION_REPLACED", "package transition belongs to another update");
+    }
     if (current.record.state !== "retired") {
       throw transitionError("PACKAGE_TRANSITION_NOT_RETIRED", "package transition is still retiring");
     }
@@ -212,23 +232,30 @@ async function postinstallPackageTransition(options, context) {
       throw transitionError("PACKAGE_TRANSITION_STALE", "retired package transition is stale");
     }
 
-    context.stage = "restore";
-    runLifecycleCommand({
-      ...options,
-      memoraxCodeHome,
-      memoraxCodeBin,
-      args: ["start", "--home", memoraxCodeHome, "--json"],
-      env: { ...options.env, MEMORAX_CODE_PACKAGE_REPLACEMENT: "1" },
-      label: "memorax-code start",
-    });
-    context.stage = "verify";
-    runLifecycleCommand({
-      ...options,
-      memoraxCodeHome,
-      memoraxCodeBin,
-      args: ["status", "--home", memoraxCodeHome, "--json"],
-      label: "memorax-code status",
-    });
+    const startEnv = { ...options.env, MEMORAX_CODE_PACKAGE_REPLACEMENT: "1",
+      // Explicit recovery renews user intent and also supports legacy records.
+      MEMORAX_CODE_PACKAGE_TRANSITION_ID: options.recover === true ? "" : current.record.transitionId };
+    const attempts = options.retryRestore === true ? 2 : 1;
+    for (const command of ["start", "status"]) {
+      context.stage = command === "start" ? "restore" : "verify";
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          runLifecycleCommand({
+            ...options, memoraxCodeHome, memoraxCodeBin,
+            args: [command, "--home", memoraxCodeHome, "--json"],
+            env: command === "start" ? startEnv : { ...options.env, MEMORAX_CODE_PACKAGE_TRANSITION_ID: "" },
+            label: `memorax-code ${command}`,
+          });
+          break;
+        } catch (error) {
+          const failure = updateFailure(error, "PACKAGE_TRANSITION_FAILED", context.stage);
+          context.firstFailure ??= failure;
+          if (attempt >= attempts || !retryableRestore(error)) throw failure;
+          context.retried = true;
+          await delay(500);
+        }
+      }
+    }
 
     context.stage = "consume";
     const finalState = requireValidTransition(memoraxCodeHome);
@@ -237,6 +264,12 @@ async function postinstallPackageTransition(options, context) {
       throw transitionError("PACKAGE_TRANSITION_REPLACED", "package transition changed before it could be consumed");
     }
     unlinkSync(transitionPath);
+    if (context.firstFailure) {
+      context.firstFailure.recoveryStatus = "restored";
+      reportUpdateFailure(context.firstFailure, {
+        home: memoraxCodeHome, operation: "install.restore",
+      });
+    }
     context.stage = "transition_lock";
     return { disposition: "restored", transitionId: current.record.transitionId };
   });
@@ -249,9 +282,31 @@ function requireValidTransition(memoraxCodeHome) {
   return state;
 }
 
+export function assertNoPendingPackageTransition(memoraxCodeHome) {
+  const state = readPackageTransitionRecord(memoraxCodeHome);
+  if (state.status !== "absent") throw packageTransitionStateError(state, packageTransitionPath(memoraxCodeHome));
+}
+
+function requestedTransitionId(env) {
+  const value = nonEmptyString(env.MEMORAX_CODE_PACKAGE_TRANSITION_ID);
+  if (value && !UUID_PATTERN.test(value)) throw transitionError("PACKAGE_TRANSITION_ID_INVALID", "invalid update attempt identity");
+  return value;
+}
+
+function retryableRestore(error) {
+  if (error.command?.error?.code === "ETIMEDOUT") return true;
+  if (error.code !== "PACKAGE_TRANSITION_COMMAND_FAILED" && error.code !== "PACKAGE_TRANSITION_COMMAND_NOT_OK") return false;
+  // Identity, permission and lock errors need intervention, not another start.
+  return !/PACKAGE_RECOVERY_|AUTHORITY|INVALID|UNSUPPORTED|EACCES|EPERM|lock_failed|lock_timeout/i.test(
+    String(error.command?.stdout ?? "") + String(error.command?.stderr ?? ""),
+  );
+}
+
 function packageTransitionStateError(state, path) {
   if (state.status === "valid") {
-    return transitionError("PACKAGE_TRANSITION_PENDING", `package transition is already ${state.record.state}: ${path}`);
+    const error = transitionError("PACKAGE_TRANSITION_PENDING", `package transition is already ${state.record.state}: ${path}; finish any active installation, then run memorax-code update --recover with the same home`);
+    error.transitionId = state.record.transitionId;
+    return error;
   }
   return new PackageTransitionRecordError(state, path);
 }

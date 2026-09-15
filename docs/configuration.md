@@ -232,6 +232,27 @@ Fresh or stopped installations without retained DSH state remain stopped.
 Direct npm installation does not run foreground setup. Do not edit these
 runtime records by hand.
 
+Postinstall retries a recoverable start or status failure once. Manual and
+automatic update commands also share an installation lock and can attempt
+restoration after their own npm child exits unsuccessfully. Service recovery
+does not turn a failed package update into success. If npm left a different
+installed version, the automatic retry deadline uses that version instead of
+assuming that package files were rolled back.
+
+Automatic restoration requires permission for that exact transition, stored in
+`runtime/install/package-recovery.json`. Ordinary stop, restart and uninstall
+revoke it under the lifecycle lock. An update observes that revision before
+retirement, so its retirement and restoration respect an intervening user stop.
+An older installed package without the recovery protocol is not automatically
+started by the new updater after a rollback.
+
+Manual and automatic update commands reject a pre-existing transition before
+invoking npm, including when there is no Backend PID. They do not infer that an
+old installation exited from the record's age. Update failures and recovery
+outcomes use the shared [default diagnostic storage](#default-searchadd-diagnostics),
+without requiring Debug. Recovery summaries link the original diagnostic IDs;
+these records are never lifecycle authority.
+
 After a failed restoration, `memorax-code update --recover [--home DIR]` resumes
 the installed package's start and status checks under the same transition lock.
 It accepts only a valid retired record and consumes it only after verification.

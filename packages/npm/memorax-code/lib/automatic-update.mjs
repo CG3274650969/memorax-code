@@ -1,7 +1,9 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { UpdateFailure, updateFailure, npmRegistryFailureFields, projectUpdateDiagnosticMessage, runUpdateInstallWithDiagnostics } from "./update-diagnostics.mjs";
+import { UpdateFailure, updateFailure, npmRegistryFailureFields, projectUpdateDiagnosticMessage } from "./update-diagnostics.mjs";
+import { installPackageUpdate } from "./package-update.mjs";
+import { assertNoPendingPackageTransition } from "./package-transition.mjs";
 import { withJsonFileLockAsync } from "./memorax-code-adapter-common/src/config-utils.mjs";
 import {
   AUTOMATIC_UPDATE_CHECK_INTERVAL_MS,
@@ -55,24 +57,18 @@ export async function runAutomaticUpdate(options) {
     installedVersion: packageVersion,
     completedByVersion: completion.record.completedByVersion,
     channel,
+    checkPending: () => assertNoPendingPackageTransition(memoraxCodeHome),
     resolveTargetVersion: async (targetChannel) => resolveTargetVersion({
       channel: targetChannel,
       env,
       packageName,
     }),
-    installVersion: async (targetVersion) => {
-      const { failure } = await runUpdateInstallWithDiagnostics((installEnv) => runNpmCommand(["install", "-g", `${packageName}@${targetVersion}`], {
-        env: {
-          ...installEnv,
-          MEMORAX_CODE_AUTOMATIC_UPDATE_PROCESS: "1",
-          MEMORAX_CODE_HOME: memoraxCodeHome,
-        },
-        stdio: "ignore",
-        windowsHide: true,
-      }), env);
-      if (failure) throw failure;
-      return true;
-    },
+    installVersion: (targetVersion) => installPackageUpdate({
+      memoraxCodeHome, packageRoot, packageName, targetVersion,
+      npmArgs: ["install", "-g", `${packageName}@${targetVersion}`],
+      env: { ...env, MEMORAX_CODE_AUTOMATIC_UPDATE_PROCESS: "1" },
+      stdio: "ignore",
+    }),
     reconcile: async (targetVersion) => await runAutomaticSetup({
       env,
       memoraxCodeHome,
@@ -126,6 +122,12 @@ export async function runAutomaticUpdateCore(options) {
         return { ok: true, disposition: "throttled", state: state.record };
       }
 
+      try {
+        options.checkPending?.();
+      } catch (error) {
+        return finish({ ok: false, disposition: "failed", reason: "recovery_required",
+          error: updateFailure(error, "PACKAGE_TRANSITION_FAILED", "transition_read") }, installedVersion, true);
+      }
       let targetVersion;
       try {
         targetVersion = requiredString(
@@ -143,13 +145,18 @@ export async function runAutomaticUpdateCore(options) {
         let installed = false;
         let failure;
         try {
-          installed = await installVersion(targetVersion) === true;
+          const result = await installVersion(targetVersion);
+          installed = result === true || result?.exitCode === 0;
+          if (!installed) {
+            failure = result?.failure;
+            if (typeof result?.installedVersion === "string") effectiveVersion = result.installedVersion;
+          }
         } catch (error) {
           failure = error;
         }
         if (!installed) {
           return finish({ ok: false, disposition: "failed", reason: "update_failed",
-            error: updateFailure(failure, "UPDATE_INSTALL_FAILED", "install") }, installedVersion, true);
+            error: updateFailure(failure, "UPDATE_INSTALL_FAILED", "install") }, effectiveVersion, true);
         }
         effectiveVersion = targetVersion;
         updated = true;

@@ -499,6 +499,8 @@ async function createPackageFixture() {
   const copiedFiles = [
     "bin/memorax-code.mjs",
     "lib/automatic-update.mjs",
+    "lib/package-update.mjs",
+    "lib/package-transition.mjs",
     "lib/update-diagnostics.mjs",
     "lib/client-hook-runtime.mjs",
     "lib/node-version.mjs",
@@ -536,6 +538,7 @@ async function createPackageFixture() {
     "diagnostic-record.mjs", "deployment-failure.mjs",
     "automatic-update-state.mjs",
     "runtime-record.mjs",
+    "package-recovery.mjs",
     "setup-completion.mjs",
   ]) {
     const target = join(root, "lib", "memorax-code-adapter-common", "src", relativePath);

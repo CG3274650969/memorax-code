@@ -292,14 +292,69 @@ test("unavailable and oversized npm diagnostic relays preserve the command failu
   await assert.rejects(readdir(dirname(relayPath)), { code: "ENOENT" });
 });
 
+test("pending recovery prevents registry and installation work and schedules a retry", async (t) => {
+  const { api, memoraxCodeHome } = await fixture(t);
+  const calls = [];
+  const result = await api.runAutomaticUpdateCore(options(memoraxCodeHome, "08:00:00", {
+    checkPending: () => { throw Object.assign(new Error("pending transition"), { code: "PACKAGE_TRANSITION_PENDING" }); },
+    resolveTargetVersion: async () => record(calls, "check", "0.1.10"),
+    installVersion: async () => record(calls, "install", true),
+    reconcile: async () => record(calls, "reconcile", true),
+  }));
+  assert.equal(result.reason, "recovery_required");
+  assert.equal(result.ok, false);
+  assert.deepEqual(calls, []);
+  assert.equal(result.error.code, "PACKAGE_TRANSITION_PENDING");
+  assert.equal(result.error.stage, "transition_read");
+  assert.equal((await readState(api, memoraxCodeHome)).nextCheckAt, "2026-08-30T08:15:00.000Z");
+});
+
+
+test("recovery diagnostics retain only recognized outcomes and causes", async (t) => {
+  const { diagnostics, memoraxCodeHome } = await fixture(t);
+  const original = new diagnostics.UpdateFailure("UPDATE_INSTALL_FAILED", "install", {
+    error: Object.assign(new Error("private-update-canary"), { code: "ETIMEDOUT" }),
+    commandResult: { exitCode: 23, stderr: "private-update-canary" },
+  });
+  original.recoveryStatus = "restored";
+  original.installedVersion = "0.1.10";
+  original.targetVersion = "private-update-canary";
+  original.causeDiagnosticId = "mc-1000000000000-11111111-1111-4111-8111-111111111111";
+  original.causeErrorCode = "PRIVATE_UPDATE_CANARY";
+  original.causeStage = "restore";
+  const output = [];
+  const recorded = diagnostics.reportUpdateFailure(original, {
+    home: memoraxCodeHome, version: "0.1.9", write: (line) => output.push(line),
+  });
+  const record = JSON.parse(await readFile(recorded.diagnostic.path, "utf8"));
+  assert.equal(record.commandExitCode, 23);
+  assert.equal(record.recoveryStatus, "restored");
+  assert.equal(record.installedVersion, "0.1.10");
+  assert.equal(record.causeDiagnosticId, undefined);
+  assert.match(record.impact, /update remains incomplete/);
+  assert.doesNotMatch(JSON.stringify(record) + output.join("\n"), /private.update.canary/i);
+  const relayed = diagnostics.projectUpdateDiagnosticMessage({
+    type: "memorax-code-diagnostic", version: 1, fields: recorded.failure, diagnostic: recorded.diagnostic,
+  });
+  assert.equal(relayed.fields.recoveryStatus, "restored");
+  const invalid = diagnostics.projectUpdateDiagnosticMessage({
+    type: "memorax-code-diagnostic", version: 1, diagnostic: recorded.diagnostic,
+    fields: { ...recorded.failure, recoveryStatus: "private-update-canary",
+      causeDiagnosticId: original.causeDiagnosticId, causeErrorCode: "PRIVATE_UPDATE_CANARY", causeStage: "restore" },
+  });
+  assert.equal(invalid.fields.recoveryStatus, undefined);
+  assert.equal(invalid.fields.causeDiagnosticId, undefined);
+});
+
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "memorax-code-automatic-update-"));
   const files = [
-    [join(packageRoot, "lib", "automatic-update.mjs"), "lib/automatic-update.mjs"],
+    ...["automatic-update", "package-update", "package-transition"]
+      .map((name) => [join(packageRoot, "lib", name + ".mjs"), "lib/" + name + ".mjs"]),
     [join(packageRoot, "lib", "update-diagnostics.mjs"), "lib/update-diagnostics.mjs"],
     [join(packageRoot, "lib", "setup-diagnostics.mjs"), "lib/setup-diagnostics.mjs"],
     [join(packageRoot, "lib", "npm-invocation.mjs"), "lib/npm-invocation.mjs"],
-    ...["config-utils.mjs", "diagnostic-record.mjs", "deployment-failure.mjs", "automatic-update-state.mjs", "runtime-record.mjs", "setup-completion.mjs"]
+    ...["config-utils.mjs", "diagnostic-record.mjs", "deployment-failure.mjs", "automatic-update-state.mjs", "runtime-record.mjs", "package-recovery.mjs", "setup-completion.mjs"]
       .map((name) => [join(commonRoot, name), `lib/memorax-code-adapter-common/src/${name}`]),
   ];
   await Promise.all(files.map(async ([source, relativeTarget]) => {

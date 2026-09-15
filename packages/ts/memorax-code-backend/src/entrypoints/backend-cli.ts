@@ -668,7 +668,7 @@ function printDiagnosticHistory(history: DiagnosticHistory): void {
     console.log(`Source: ${record.source}`);
     if (record.client) console.log(`Client: ${record.client}`);
     console.log(`Operation: ${record.operation}\nStage: ${record.stage}\nError code: ${record.errorCode}\nError: ${record.error}`);
-    for (const key of ["systemCode", "httpStatus", "failureReason", "recordReason", "credentialReason", "configState", "commandExitCode", "commandSignal", "retryAfterMs", "processState", "cleanupErrorCode", "cleanupSystemCode", "recoveryErrorCode", "recoveryStage", "recoverySystemCode", "sessionHash", "turnHash"] as const) {
+    for (const key of ["systemCode", "httpStatus", "failureReason", "recordReason", "credentialReason", "configState", "commandExitCode", "commandSignal", "retryAfterMs", "processState", "cleanupErrorCode", "cleanupSystemCode", "recoveryErrorCode", "recoveryStage", "recoverySystemCode", "recoveryStatus", "installedVersion", "targetVersion", "causeDiagnosticId", "causeErrorCode", "causeStage", "recoveryDiagnosticId", "sessionHash", "turnHash"] as const) {
       if (record[key] !== undefined) console.log(`${key}: ${record[key]}`);
     }
     console.log(`Impact: ${record.impact}\nNext step: ${record.userAction}`);
