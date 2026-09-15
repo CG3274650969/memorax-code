@@ -230,6 +230,10 @@ Native client commands retain only safe command outcomes in their diagnostic:
 `cleanupErrorCode` and an available `cleanupSystemCode` describe a separate
 cleanup failure without replacing the original error. Preserve existing client
 files and recovery artifacts until their ownership and state are understood.
+Claude Code native plugin commands allow up to 30 seconds. A native command
+timeout identifies the process deadline, not whether networking or local
+initialization caused the delay.
+
 Raw client output can contain local paths or configuration; review it separately
 before sharing the content-free diagnostic.
 
