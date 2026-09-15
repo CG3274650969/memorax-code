@@ -143,11 +143,12 @@ export function runBackendCli(argv = process.argv): void {
     } catch (error) {
       const status = backendConnectionStatusFailure(error, serviceOptions);
       printStatusWithDiagnostics(status, serviceOptions, argv);
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
     collectMemoraxCodeStatus(backendUrl, backendToken, serviceOptions, argv).then((status) => {
       printStatusWithDiagnostics(status, serviceOptions, argv);
-      process.exit(status.ok ? 0 : 1);
+      process.exitCode = status.ok ? 0 : 1;
     }).catch((error) => {
       console.error(error instanceof Error ? error.message : String(error));
       process.exit(1);
@@ -620,12 +621,15 @@ function runDiagnosticLogs(argv: string[]): void {
     const failure = { ok: false, action: "diagnostics", errorCode: "DIAGNOSTIC_ARGUMENT_INVALID", error: "Use logs --diagnostics [--limit 1..1000] [--id ID] [--json] [--home DIR]." };
     if (argv.includes("--json")) console.log(JSON.stringify(failure, null, 2));
     else console.error(`${failure.errorCode}: ${failure.error}`);
-    process.exit(2);
+    process.exitCode = 2;
+    return;
   }
   const result = readDiagnosticHistory(home, query);
   if (argv.includes("--json")) console.log(JSON.stringify({ action: "diagnostics", ...result }, null, 2));
   else printDiagnosticHistory(result);
-  process.exit(result.ok ? 0 : 1);
+  // Large history output can still be buffered in a pipe after console.log.
+  // Let Node drain it before exiting so successful exports remain complete.
+  process.exitCode = result.ok ? 0 : 1;
 }
 
 function parseDiagnosticQuery(argv: string[]): { limit?: number; id?: string } {

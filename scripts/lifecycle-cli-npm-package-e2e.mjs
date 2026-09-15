@@ -348,6 +348,11 @@ async function assertDiagnosticDiscovery(stateHome, realRecord, blockedHome) {
   const allOutput = await queryDiagnostics(stateHome, ["--limit", "1000"]);
   assert.equal(allOutput.code, 0, allOutput.stdout);
   assert.deepEqual(JSON.parse(allOutput.stdout).records.map((record) => record.id), validIds);
+  assert.ok(Buffer.byteLength(allOutput.stdout) > 64 * 1024, "History export must exercise buffered output");
+  const allText = await queryDiagnostics(stateHome, ["--limit", "1000"], { json: false });
+  assert.equal(allText.code, 0);
+  assert.deepEqual([...allText.stdout.matchAll(/^Diagnostic ID: (.+)$/gm)].map((match) => match[1]), validIds);
+  assert.ok(allText.stdout.trimEnd().endsWith(`Next step: ${realRecord.userAction}`), "Text export must include the final record in full");
   const lookup = await queryDiagnostics(stateHome, ["--id", realRecord.id]);
   assert.equal(lookup.code, 0);
   assert.equal(JSON.parse(lookup.stdout).records.length, 1);
