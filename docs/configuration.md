@@ -705,7 +705,7 @@ for the failure fields and process-state guidance.
 Setup also reports configuration, secure credential, local readiness, and
 completion-record failures by default. Setup-owned records have
 `source: "memorax-code-setup"` and `operation: "setup"`, and share the storage,
-permissions, and 100-record/seven-day retention above. A failed Backend command's
+permissions, and retention policy above. A failed Backend command's
 existing diagnostic ID is reused instead of producing a duplicate setup record.
 Configuration details include the failed write stage and `configState`; neither
 configuration content nor credential or device identity values are retained.
