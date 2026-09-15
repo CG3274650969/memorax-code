@@ -679,8 +679,8 @@ $MEMORAX_CODE_HOME/runtime/diagnostics/<diagnostic-id>.json
 The command returns the diagnostic ID and, when saved, its file path. On POSIX
 systems, new diagnostic files use mode `0600` and diagnostic directories are
 created or tightened to `0700`; Windows uses the current user's filesystem
-ACLs. Each successful write attempts to retain the newest 100 records from
-the last seven days. Cleanup is best-effort and runs when a record is written,
+ACLs. Each successful write attempts to retain the newest 1000 records from
+the last 30 days. Cleanup is best-effort and runs when a record is written,
 not on a background schedule.
 
 Records retain operational metadata and safe error details, excluding queries,
