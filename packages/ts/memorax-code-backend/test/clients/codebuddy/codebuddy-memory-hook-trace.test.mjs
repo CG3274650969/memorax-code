@@ -171,10 +171,13 @@ test("WorkBuddy provisional turn writeback and nested Skill commands share Gener
   const nested = join(workspace, "work");
   await mkdir(nested, { recursive: true });
   const sessionId = "runtime-completed";
-  const prompt = "persist this turn";
+  const prompt = "/memorax-code persist this turn";
   const turnId = provisionalTurnId(sessionId, prompt);
   await writeFile(transcriptPath, lines([
-    { id: "u-native", type: "message", role: "user", sessionId, timestamp: 1_700_000_000_000, content: [{ type: "input_text", text: prompt }] },
+    { id: "u-native", type: "message", role: "user", sessionId, timestamp: 1_700_000_000_000, content: [
+      { type: "input_text", text: "<command-name>/memorax-code</command-name>\n# MemoraX Code\nExpanded instructions",
+        providerData: { content: prompt } },
+    ] },
     { id: "a-native", type: "message", role: "assistant", parentId: "u-native", status: "completed", timestamp: 1_700_000_060_000, content: [{ type: "output_text", text: "persisted reply" }] },
   ]));
   const requests = [];

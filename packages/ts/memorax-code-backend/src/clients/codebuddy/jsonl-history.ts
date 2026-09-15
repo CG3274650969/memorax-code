@@ -186,6 +186,20 @@ function parseJsonLines(text: string): ParsedHistoryRecord[] | undefined {
 }
 
 function visibleUserPrompt(record: CodeBuddyHistoryRecord): string | undefined {
+  // WorkBuddy preserves the original input here before expanding a Slash
+  // command into Skill instructions. Only transcripts without it use legacy text.
+  const originals: string[] = [];
+  for (const item of Array.isArray(record.content) ? record.content : []) {
+    if (!item || typeof item !== "object" || item.type !== "input_text") continue;
+    const providerData: unknown = item.providerData;
+    if (!providerData || typeof providerData !== "object" || Array.isArray(providerData) || !("content" in providerData)) continue;
+    // Invalid originals must not authorize the expanded text. Correlation below
+    // still requires the exact prompt digest, byte boundary, and native lineage.
+    if (typeof providerData.content !== "string" || !providerData.content.trim()) return undefined;
+    originals.push(providerData.content);
+  }
+  if (originals.length > 0) return originals.join("\n").trim();
+
   const content = messageContentText(record.content, "input_text");
   if (!content) return undefined;
   const match = content.match(/<user_query>([\s\S]*?)<\/user_query>/);
