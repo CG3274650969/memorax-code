@@ -696,7 +696,7 @@ whether a problem is still active and never change the current status result or
 exit code. Failure to read history is reported separately.
 
 `memorax-code logs --diagnostics` lists the latest five valid records;
-`--limit N` accepts 1 through 100. `memorax-code logs --id <diagnostic-id>`
+`--limit N` accepts 1 through 1000. `memorax-code logs --id <diagnostic-id>`
 reads one retained record by its exact ID. `--id` and `--limit` each select
 diagnostic mode without requiring `--diagnostics`, but cannot be combined.
 Add `--json` for the structured projection. Plain `memorax-code logs` continues
@@ -704,7 +704,7 @@ to show Backend logs.
 
 Queries use `--home DIR`, then `MEMORAX_CODE_HOME`, then the default home.
 They do not require a running Backend or enabled Debug/trace. Lists inspect at
-most the newest 100 candidate records within seven days; ID lookup can find an
+most the newest 1000 candidate records within 30 days; ID lookup can find an
 older record if write-time retention has not removed it. Inspection creates no
 files and never performs retention cleanup. Unreadable or invalid records are
 reported separately from valid results. An empty directory is a successful empty
