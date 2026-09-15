@@ -615,7 +615,7 @@ test("uses the selected DSH installation before the legacy Profile module tree",
     dshCommand: process.platform === "win32" ? entrypoint : "dsh",
     env: { PATH: binRoot },
     runDsh(invocation) {
-      const args = invocation.command === process.execPath ? invocation.args.slice(1) : invocation.args;
+      const args = dshArguments(invocation);
       if (args[0] === "--version") return { status: 0, stdout: "0.1.2-rc.1\n" };
       assert.deepEqual([args[0], args[1], args[3]], ["plugin", "--profile", "add"]);
       calls.push(args[2]);
@@ -1256,4 +1256,14 @@ function writeProfile(profilesRoot, name, bundles = []) {
     });
     writeFileSync(join(headlessRoot, "index.js"), "module.exports = {};\n");
   }
+}
+
+function dshArguments(invocation) {
+  if (invocation.command !== process.execPath) return invocation.args;
+  const args = invocation.args;
+  if (args[0] === "--import") {
+    assert.match(args[1], /^data:text\/javascript;base64,/);
+    return args.slice(3);
+  }
+  return args.slice(1);
 }
