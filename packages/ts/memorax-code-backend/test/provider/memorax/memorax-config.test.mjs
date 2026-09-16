@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -161,6 +162,33 @@ test("MemoraX Code loads configured-home TOML and resolves credentials, writebac
   assert.equal(options.ok, true);
   assert.equal(options.options.contentType, "code");
   assert.equal(options.options.mode, "default");
+});
+
+test("config loaders reject an unfinished value ending in a comment without hanging", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "memorax-code-config-eof-comment-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const configModule = new URL("../../../dist/config/memorax-code.js", import.meta.url).href;
+
+  // Bound the child process: a synchronous parser loop also blocks test-runner timers.
+  const result = spawnSync(process.execPath, ["--input-type=module", "--eval", `
+    import assert from "node:assert/strict";
+    import { writeFileSync } from "node:fs";
+    import { join } from "node:path";
+    import { loadMemoraxCodeConfig, loadLifecycleMemoraxCodeConfig } from ${JSON.stringify(configModule)};
+
+    const home = process.argv[1];
+    for (const source of ["[clients]\\ncodex = [true #", "clients = { codex = true #"]) {
+      writeFileSync(join(home, "config.toml"), source);
+      const warnings = [];
+      assert.deepEqual(loadMemoraxCodeConfig(home, { warn: (message) => warnings.push(message) }), {});
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0], /failed to parse MemoraX Code config/);
+      assert.throws(() => loadLifecycleMemoraxCodeConfig(home), /failed to parse MemoraX Code lifecycle config/);
+    }
+  `, root], { encoding: "utf8", timeout: 2000, killSignal: "SIGKILL" });
+
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
 test("memory config status merges explicit config fields and env overrides", async () => {

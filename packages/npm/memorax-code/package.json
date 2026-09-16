@@ -47,7 +47,7 @@
     "node": ">=20"
   },
   "dependencies": {
-    "smol-toml": "^1.7.0"
+    "smol-toml": "^1.8.0"
   },
   "scripts": {
     "preinstall": "node ./bin/memorax-code-npm-preinstall.mjs",
