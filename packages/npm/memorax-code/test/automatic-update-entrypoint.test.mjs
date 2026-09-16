@@ -54,6 +54,41 @@ test("automatic update reports npm registry authentication failure without respo
   assert.deepEqual(await readJsonLines(fixture.setupLogPath), []);
 });
 
+test("failed automatic installation records the actual replaced version and retry deadline", {
+  skip: process.platform === "win32",
+}, async (t) => {
+  const fixture = await createFixture(t);
+  await writeSetupCompletion(fixture.memoraxCodeHome, "0.1.9");
+  const startedAt = Date.now();
+  const result = runAutomaticUpdate(fixture, { MEMORAX_CODE_TEST_NPM_FAIL: "1" });
+  assert.equal(result.status, 1);
+  assert.deepEqual(await readJsonLines(fixture.setupLogPath), []);
+  const state = JSON.parse(await readFile(join(fixture.memoraxCodeHome, "runtime", "install", "automatic-update.json"), "utf8"));
+  assert.equal(state.installedVersion, "0.1.10");
+  assert.ok(Date.parse(state.nextCheckAt) >= startedAt + 15 * 60 * 1_000);
+  assert.ok(Date.parse(state.nextCheckAt) <= Date.now() + 15 * 60 * 1_000);
+  assert.equal(JSON.parse(await readFile(join(fixture.root, "package.json"), "utf8")).version, "0.1.10");
+  const repeated = runAutomaticUpdate(fixture);
+  assert.equal(repeated.status, 0, repeated.stderr);
+  assert.equal((await readJsonLines(fixture.npmLogPath)).length, 2, "the failed replacement version must be throttled until its retry deadline");
+});
+
+test("successful npm exit cannot hide installation at an unexpected version", {
+  skip: process.platform === "win32",
+}, async (t) => {
+  const fixture = await createFixture(t);
+  await writeSetupCompletion(fixture.memoraxCodeHome, "0.1.9");
+  const result = runAutomaticUpdate(fixture, { MEMORAX_CODE_TEST_NPM_VERSION: "0.1.11" });
+  assert.equal(result.status, 1);
+  assert.deepEqual(await readJsonLines(fixture.setupLogPath), []);
+  const saved = JSON.parse(await readFile(join(fixture.memoraxCodeHome, "runtime", "diagnostics", (await readdir(join(fixture.memoraxCodeHome, "runtime", "diagnostics")))[0]), "utf8"));
+  assert.equal(saved.errorCode, "UPDATE_INSTALLED_PACKAGE_MISMATCH");
+  assert.equal(saved.targetVersion, "0.1.10");
+  assert.equal(saved.installedVersion, "0.1.11");
+  const state = JSON.parse(await readFile(join(fixture.memoraxCodeHome, "runtime", "install", "automatic-update.json"), "utf8"));
+  assert.equal(state.installedVersion, "0.1.11");
+});
+
 test("automatic update respects the explicit opt-out", {
   skip: process.platform === "win32",
 }, async (t) => {
@@ -76,6 +111,8 @@ async function createFixture(t) {
   await Promise.all([
     "bin/memorax-code.mjs",
     "lib/automatic-update.mjs",
+    "lib/package-update.mjs",
+    "lib/package-transition.mjs",
     "lib/update-diagnostics.mjs",
     "lib/setup-diagnostics.mjs",
     "lib/client-hook-runtime.mjs",
@@ -100,6 +137,7 @@ async function createFixture(t) {
     "config-utils.mjs", "diagnostic-record.mjs", "deployment-failure.mjs",
     "automatic-update-state.mjs",
     "runtime-record.mjs",
+    "package-recovery.mjs",
     "setup-completion.mjs",
   ].map(async (relativePath) => {
     const target = join(root, "lib", "memorax-code-adapter-common", "src", relativePath);
@@ -139,6 +177,10 @@ async function createFixture(t) {
     "}",
     "if (args[0] === 'view') console.log(JSON.stringify('0.1.10'));",
     "if (args[0] === 'install') {",
+    `  const metadataPath = ${JSON.stringify(join(root, "package.json"))};`,
+    "  const metadata = JSON.parse(readFileSync(metadataPath, 'utf8'));",
+    "  writeFileSync(metadataPath, JSON.stringify({ ...metadata, version: process.env.MEMORAX_CODE_TEST_NPM_VERSION ?? '0.1.10' }));",
+    "  if (process.env.MEMORAX_CODE_TEST_NPM_FAIL === '1') process.exit(23);",
     "  const path = join(process.env.MEMORAX_CODE_HOME, 'runtime', 'setup', 'setup-completion.json');",
     "  const record = JSON.parse(readFileSync(path, 'utf8'));",
     "  writeFileSync(path, JSON.stringify({ ...record, completedByVersion: '0.1.10' }) + '\\n');",

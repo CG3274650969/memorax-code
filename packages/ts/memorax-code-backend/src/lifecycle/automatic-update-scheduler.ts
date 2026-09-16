@@ -45,7 +45,9 @@ export function startBackendAutomaticUpdateScheduler(
   if (!packageRoot || !installedVersion) return undefined;
   const memoraxCodeHome = resolve(options.memoraxCodeHome);
   const memoraxCodeCommand = join(resolve(packageRoot), "bin", "memorax-code.mjs");
-  if (!(runtime.existsSync ?? existsSync)(memoraxCodeCommand)) return undefined;
+  const fileExists = runtime.existsSync ?? existsSync;
+  if (!fileExists(memoraxCodeCommand)) return undefined;
+  const transitionPath = join(memoraxCodeHome, "runtime", "install", "package-transition.json");
 
   const readCompletion = runtime.readSetupCompletionRecord ?? readSetupCompletionRecord;
   const readUpdateState = runtime.readAutomaticUpdateState ?? readAutomaticUpdateState;
@@ -58,9 +60,10 @@ export function startBackendAutomaticUpdateScheduler(
   let closed = false;
   let childRunning = false;
   let timer: TimerHandle | undefined;
-  // The updater may restart the Backend before committing its next deadline;
-  // defer the first launch to avoid recursively dispatching another updater.
-  let suppressImmediate = env.MEMORAX_CODE_AUTOMATIC_UPDATE_PROCESS === "1";
+  // Restoration starts the Backend before consuming its transition or saving
+  // the next deadline. Let the current installation finish before checking again.
+  let suppressImmediate = env.MEMORAX_CODE_AUTOMATIC_UPDATE_PROCESS === "1"
+    || (env.MEMORAX_CODE_PACKAGE_REPLACEMENT === "1" && fileExists(transitionPath));
 
   const debug = (message: string): void => options.debug?.(message);
   const scheduleAfter = (delayMs: number): void => {
@@ -126,10 +129,12 @@ export function startBackendAutomaticUpdateScheduler(
         scheduleRetry();
         return;
       }
-      if (state.status === "valid" && state.record.installedVersion === installedVersion) {
+      // Existence only wakes the updater; it owns record validation and diagnostics.
+      if (!fileExists(transitionPath) && state.status === "valid" && state.record.installedVersion === installedVersion) {
         const remainingMs = Date.parse(state.record.nextCheckAt) - nowMs;
         if (remainingMs > 0) {
-          scheduleAfter(remainingMs);
+          // Recheck local pending state without advancing the npm registry deadline.
+          scheduleAfter(Math.min(remainingMs, AUTOMATIC_UPDATE_RETRY_INTERVAL_MS));
           return;
         }
       }

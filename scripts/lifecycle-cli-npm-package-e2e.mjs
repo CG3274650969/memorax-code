@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
 
 const execFileAsync = promisify(execFile);
 assert.ok(process.argv[2], "An installed npm package root is required");
@@ -291,7 +292,7 @@ async function assertDiagnostic(report, stateHome, operation = `backend.${report
 async function assertDiagnosticDiscovery(stateHome, realRecord, blockedHome) {
   const directory = join(stateHome, "runtime", "diagnostics");
   const secret = "private-discovery-unknown-field-canary";
-  const now = Date.now();
+  const now = Date.now() - 2;
   const copies = [0, 1, 2].map((index) => ({
     ...realRecord,
     id: `mc-${now - 2 + index}-${randomUUID()}`,
@@ -301,6 +302,15 @@ async function assertDiagnosticDiscovery(stateHome, realRecord, blockedHome) {
     rawException: { message: secret },
   }));
   for (const record of copies) await writeFile(join(directory, `${record.id}.json`), JSON.stringify(record), { mode: 0o600 });
+  const { UpdateFailure, reportUpdateFailure } = await import(pathToFileURL(join(packageRoot, "lib", "update-diagnostics.mjs")));
+  const failure = new UpdateFailure("UPDATE_INSTALL_FAILED", "install", { commandResult: { exitCode: 23 } });
+  failure.recoveryStatus = "restored";
+  failure.causeDiagnosticId = realRecord.id;
+  failure.causeErrorCode = realRecord.errorCode;
+  failure.causeStage = realRecord.stage;
+  const saved = reportUpdateFailure(failure, { home: stateHome, version: packageVersion, write() {} });
+  const recoveryRecord = JSON.parse(await readFile(saved.diagnostic.path, "utf8"));
+
   // Older retained records must remain discoverable beyond the former seven-day/100-record window.
   for (let index = 0; index < 101; index += 1) {
     const timestamp = now - 29 * 24 * 60 * 60 * 1000 - index;
@@ -359,7 +369,7 @@ async function assertDiagnosticDiscovery(stateHome, realRecord, blockedHome) {
   assert.equal(JSON.parse(lookup.stdout).records[0].id, realRecord.id);
   const feedback = await queryDiagnostics(stateHome, ["--id", copies[2].id], { json: false });
   assert.equal(feedback.code, 0);
-  assert.match(feedback.stdout, /MemoraX Code diagnostic history/);
+  assert.match(feedback.stdout, /MemoraX Code diagnostic history .*available recovery outcomes; not current service health/);
   for (const label of ["Diagnostic ID", "Time", "Operation", "Stage", "Error code", "Error", "Impact", "Next step"]) {
     assert.ok(feedback.stdout.includes(label), `Feedback text must include ${label}`);
   }
@@ -367,6 +377,17 @@ async function assertDiagnosticDiscovery(stateHome, realRecord, blockedHome) {
   assert.equal(feedback.stdout.includes(secret), false);
   assert.doesNotMatch(feedback.stdout, /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/);
 
+  const recoveryLookup = await queryDiagnostics(stateHome, ["--id", recoveryRecord.id]);
+  assert.equal(recoveryLookup.code, 0);
+  const recovered = JSON.parse(recoveryLookup.stdout).records[0];
+  assert.equal(recovered.recoveryStatus, "restored");
+  assert.equal(recovered.causeDiagnosticId, realRecord.id);
+  assert.equal(recovered.causeErrorCode, realRecord.errorCode);
+  assert.equal(recovered.causeStage, realRecord.stage);
+  assert.equal(recovered.commandExitCode, 23);
+  const recoveryText = await queryDiagnostics(stateHome, ["--id", recoveryRecord.id], { json: false });
+  assert.match(recoveryText.stdout, /recoveryStatus: restored/);
+  assert.ok(recoveryText.stdout.includes(realRecord.id));
   const unavailable = await runCli("status", stateHome, { connectionOptions: false });
   assert.equal(unavailable.code, 1);
   const unavailableStatus = JSON.parse(unavailable.stdout);
@@ -392,7 +413,7 @@ async function assertDiagnosticDiscovery(stateHome, realRecord, blockedHome) {
   assert.deepEqual(JSON.parse(empty.stdout).records, []);
   assert.equal(JSON.parse(empty.stdout).ok, true);
   await assert.rejects(stat(emptyHome), { code: "ENOENT" });
-  return [realRecord, ...copies];
+  return [realRecord, ...copies, recoveryRecord];
 }
 
 async function assertHealthyDiagnosticSummary(records) {
@@ -406,6 +427,10 @@ async function assertHealthyDiagnosticSummary(records) {
     assert.equal(report.ok, true, "Historical failures must not change current healthy status");
     assert.equal(report.diagnostics.ok, true);
     assert.equal(report.diagnostics.records.length, 3);
+    const recovery = records.find((record) => record.recoveryStatus === "restored");
+    assert.equal(report.diagnostics.records.find((record) => record.id === recovery.id).recoveryStatus, "restored");
+    const lookup = await queryDiagnostics(healthyHome, ["--id", recovery.id]);
+    assert.equal(JSON.parse(lookup.stdout).records[0].recoveryStatus, "restored");
     const human = await runCli("status", healthyHome, { port: healthyPort, json: false });
     assert.equal(human.code, 0);
     assert.match(human.stdout, /Recent failures/);

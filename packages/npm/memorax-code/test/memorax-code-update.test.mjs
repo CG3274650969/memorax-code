@@ -15,7 +15,9 @@ async function createPackageFixture(version) {
   await mkdir(join(root, "lib"), { recursive: true });
   await mkdir(join(root, "lib", "memorax-code-adapter-common", "src"), { recursive: true });
   await cp(join(packageRoot, "bin", "memorax-code.mjs"), join(root, "bin", "memorax-code.mjs"));
-  await cp(join(packageRoot, "lib", "automatic-update.mjs"), join(root, "lib", "automatic-update.mjs"));
+  for (const name of ["automatic-update", "package-update", "package-transition"]) {
+    await cp(join(packageRoot, "lib", name + ".mjs"), join(root, "lib", name + ".mjs"));
+  }
   await cp(join(packageRoot, "lib", "update-diagnostics.mjs"), join(root, "lib", "update-diagnostics.mjs"));
   await cp(join(packageRoot, "lib", "setup-diagnostics.mjs"), join(root, "lib", "setup-diagnostics.mjs"));
   await cp(join(packageRoot, "lib", "client-hook-runtime.mjs"), join(root, "lib", "client-hook-runtime.mjs"));
@@ -26,6 +28,7 @@ async function createPackageFixture(version) {
     "config-utils.mjs", "diagnostic-record.mjs", "deployment-failure.mjs",
     "automatic-update-state.mjs",
     "runtime-record.mjs",
+    "package-recovery.mjs",
     "setup-completion.mjs",
   ]) {
     const target = join(root, "lib", "memorax-code-adapter-common", "src", name);
@@ -218,7 +221,6 @@ test("manual and automatic npm failures reuse their lifecycle hook diagnostic", 
         await cp(join(packageRoot, "lib", "package-transition.mjs"), join(root, "lib", "package-transition.mjs"));
         for (const directory of ["backend", "install", "setup"]) await mkdir(join(home, "runtime", directory), { recursive: true });
         await writeFile(join(home, "runtime", "backend", "backend.pid.json"), "{}");
-        await writeFile(join(home, "runtime", "install", "package-transition.json"), "{private-transition-canary");
         await writeFile(join(home, "runtime", "setup", "setup-completion.json"), JSON.stringify({
           version: 1, state: "complete", completedAt: "2026-08-30T08:00:00.000Z", completedByVersion: "0.1.9",
         }));
@@ -226,7 +228,9 @@ test("manual and automatic npm failures reuse their lifecycle hook diagnostic", 
           'import { spawnSync } from "node:child_process";',
           'import { writeFileSync } from "node:fs";',
           'import { fileURLToPath } from "node:url";',
+          'import { join } from "node:path";',
           'export async function runNpmCommand(args, options) {',
+          '  writeFileSync(join(options.env.MEMORAX_CODE_HOME, "runtime", "install", "package-transition.json"), "{private-transition-canary");',
           '  writeFileSync(new URL("../relay-path.txt", import.meta.url), options.env.MEMORAX_CODE_UPDATE_DIAGNOSTIC_PATH);',
           `  const child = spawnSync(process.execPath, [fileURLToPath(new URL("../bin/${hook}", import.meta.url))], options);`,
           '  if (child.status !== 1) throw new Error("expected fixture hook failure");',

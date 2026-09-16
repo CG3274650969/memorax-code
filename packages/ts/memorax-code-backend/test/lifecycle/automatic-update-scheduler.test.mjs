@@ -51,8 +51,64 @@ test("Backend started by an update suppresses only its immediate recursive check
   context.controls.state = updateState("0.1.10", context.controls.now + 45 * 60 * 1_000);
   context.timers.runNext();
   assert.equal(context.spawns.length, 0);
-  assert.equal(context.timers.pending[0].delay, 45 * 60 * 1_000);
+  assert.equal(context.timers.pending[0].delay, RETRY_INTERVAL_MS);
   context.scheduler.close();
+});
+
+test("pending transitions bypass the registry deadline but retain failure backoff", () => {
+  const context = fixture({
+    pending: true,
+    state: updateState("0.1.9", STARTED_AT + 8 * 60 * 60 * 1_000),
+  });
+  assert.equal(context.spawns.length, 1);
+  context.children[0].emit("close", 1, null);
+  assert.equal(context.spawns.length, 1);
+  assert.equal(context.timers.pending[0].delay, RETRY_INTERVAL_MS);
+
+  context.controls.now += RETRY_INTERVAL_MS;
+  context.timers.runNext();
+  assert.equal(context.spawns.length, 2);
+  context.scheduler.close();
+});
+
+test("local scheduling checks notice a transition created during the registry throttle", () => {
+  const context = fixture({
+    state: updateState("0.1.9", STARTED_AT + 8 * 60 * 60 * 1_000),
+  });
+  assert.equal(context.spawns.length, 0);
+  assert.equal(context.timers.pending[0].delay, RETRY_INTERVAL_MS);
+
+  context.controls.pending = true;
+  context.controls.now += RETRY_INTERVAL_MS;
+  context.timers.runNext();
+  assert.equal(context.spawns.length, 1);
+
+  context.controls.pending = false;
+  context.children[0].emit("close", 0, null);
+  context.controls.now += RETRY_INTERVAL_MS;
+  context.timers.runNext();
+  assert.equal(context.spawns.length, 1, "local checks do not query the registry before its deadline");
+  context.scheduler.close();
+});
+
+test("manual and automatic restoration can consume their transition before diagnostic checks", () => {
+  for (const env of [
+    { MEMORAX_CODE_PACKAGE_REPLACEMENT: "1" },
+    { MEMORAX_CODE_AUTOMATIC_UPDATE_PROCESS: "1" },
+  ]) {
+    const context = fixture({
+      env, pending: true,
+      state: updateState("0.1.9", STARTED_AT + 8 * 60 * 60 * 1_000),
+    });
+    assert.equal(context.spawns.length, 0);
+    assert.equal(context.timers.pending[0].delay, RETRY_INTERVAL_MS);
+
+    context.controls.pending = false;
+    context.controls.now += RETRY_INTERVAL_MS;
+    context.timers.runNext();
+    assert.equal(context.spawns.length, 0);
+    context.scheduler.close();
+  }
 });
 
 test("explicit automatic-update opt-out prevents the Backend scheduler", () => {
@@ -61,11 +117,11 @@ test("explicit automatic-update opt-out prevents the Backend scheduler", () => {
   assert.equal(context.timers.pending.length, 0);
 });
 
-function fixture({ env = {}, packageVersion = "0.1.9", state = updateState() } = {}) {
+function fixture({ env = {}, packageVersion = "0.1.9", state = updateState(), pending = false } = {}) {
   const packageRoot = "/installed/memorax-code";
   const memoraxCodeHome = "/state/memorax-code";
   const timers = fakeTimers();
-  const controls = { now: STARTED_AT, state };
+  const controls = { now: STARTED_AT, state, pending };
   const children = [];
   const spawns = [];
   const scheduler = startBackendAutomaticUpdateScheduler({
@@ -74,7 +130,8 @@ function fixture({ env = {}, packageVersion = "0.1.9", state = updateState() } =
     packageRoot,
     packageVersion,
   }, {
-    existsSync: () => true,
+    existsSync: (path) => path === join(packageRoot, "bin", "memorax-code.mjs")
+      || (path === join(memoraxCodeHome, "runtime", "install", "package-transition.json") && controls.pending),
     now: () => controls.now,
     readAutomaticUpdateState: () => controls.state,
     readSetupCompletionRecord: () => setupCompletion(),

@@ -6,6 +6,15 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BackendConnectionAuthorityError } from "../../../memorax-code-adapter-common/src/backend-connection.mjs";
 import { RuntimeRecordError } from "../../../memorax-code-adapter-common/src/runtime-record.mjs";
+import {
+  PACKAGE_TRANSITION_ID_ENV,
+  PACKAGE_STOP_REVISION_ENV,
+  packageRecoveryTransitionId,
+  assertPackageRecoveryRevision,
+  writePackageRecoveryPermit,
+  assertPackageRecoveryPermit,
+  clearPackageRecoveryPermit,
+} from "../../../memorax-code-adapter-common/src/package-recovery.mjs";
 import { withSetupCompletionLock } from "../../../memorax-code-adapter-common/src/setup-completion.mjs";
 import { runBackendStatus } from "./backend/status.js";
 import { backendServiceFailureFields, backendServicePreflightFailureFields } from "./backend/result.js";
@@ -1192,9 +1201,54 @@ async function withMemoraxCodeLifecycleLock(
   serviceOptions: BackendServiceOptions,
   operation: () => Promise<MemoraxCodeLifecycleReport>,
 ): Promise<MemoraxCodeLifecycleReport> {
+  let checkingRecovery = false;
   try {
-    return await withBackendLifecycleLock(serviceOptions, operation);
+    return await withBackendLifecycleLock(serviceOptions, async () => {
+      const home = memoraxCodeHomeForService(serviceOptions);
+      checkingRecovery = true;
+      const transitionId = isPackageReplacement() && (action === "start" || action === "stop")
+        ? packageRecoveryTransitionId()
+        : undefined;
+      const stopRevision = action === "stop" && transitionId
+        ? process.env[PACKAGE_STOP_REVISION_ENV] || undefined
+        : undefined;
+      if (stopRevision) assertPackageRecoveryRevision(home, stopRevision);
+      if (action === "start" && transitionId) assertPackageRecoveryPermit(home, transitionId);
+      if ((action === "stop" && !isPackageReplacement()) || action === "restart" || action === "uninstall") {
+        clearPackageRecoveryPermit(home);
+      }
+      checkingRecovery = false;
+      // A restoration credential belongs to this CLI, never to the Backend it starts.
+      const inheritedTransitionId = process.env[PACKAGE_TRANSITION_ID_ENV];
+      const inheritedStopRevision = process.env[PACKAGE_STOP_REVISION_ENV];
+      delete process.env[PACKAGE_TRANSITION_ID_ENV];
+      delete process.env[PACKAGE_STOP_REVISION_ENV];
+      try {
+        const report = await operation();
+        if (action === "stop" && transitionId && stopRevision && report.ok) {
+          checkingRecovery = true;
+          writePackageRecoveryPermit(home, transitionId);
+          checkingRecovery = false;
+        }
+        return report;
+      } finally {
+        if (inheritedTransitionId === undefined) delete process.env[PACKAGE_TRANSITION_ID_ENV];
+        else process.env[PACKAGE_TRANSITION_ID_ENV] = inheritedTransitionId;
+        if (inheritedStopRevision === undefined) delete process.env[PACKAGE_STOP_REVISION_ENV];
+        else process.env[PACKAGE_STOP_REVISION_ENV] = inheritedStopRevision;
+      }
+    });
   } catch (error) {
+    if (checkingRecovery) {
+      return {
+        ok: false, action,
+        backend: {
+          ok: false, action,
+          error: error instanceof Error ? error.message : String(error),
+          ...backendServiceFailureFields(error, "PACKAGE_RECOVERY_PERMISSION_FAILED", "recovery_authority"),
+        },
+      };
+    }
     if (!(error instanceof BackendLifecycleLockError)) throw error;
     return {
       ok: false,

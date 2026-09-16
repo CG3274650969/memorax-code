@@ -658,7 +658,7 @@ function parseDiagnosticQuery(argv: string[]): { limit?: number; id?: string } {
 }
 
 function printDiagnosticHistory(history: DiagnosticHistory): void {
-  console.log("MemoraX Code diagnostic history (recorded failures; recovery is not tracked).");
+  console.log("MemoraX Code diagnostic history (recorded failures and available recovery outcomes; not current service health).");
   if (history.errorCode) console.log(`${history.errorCode}${history.systemCode ? ` (${history.systemCode})` : ""}: ${diagnosticReadGuidance(history.errorCode)}`);
   if (history.skipped) console.log(`Skipped ${history.skipped} unreadable or invalid diagnostic record(s).`);
   if (history.ok && !history.records.length && !history.skipped) console.log("No retained failure records found. This does not confirm Hook execution or writeback success.");
@@ -668,7 +668,7 @@ function printDiagnosticHistory(history: DiagnosticHistory): void {
     console.log(`Source: ${record.source}`);
     if (record.client) console.log(`Client: ${record.client}`);
     console.log(`Operation: ${record.operation}\nStage: ${record.stage}\nError code: ${record.errorCode}\nError: ${record.error}`);
-    for (const key of ["systemCode", "httpStatus", "failureReason", "recordReason", "credentialReason", "configState", "commandExitCode", "commandSignal", "retryAfterMs", "processState", "cleanupErrorCode", "cleanupSystemCode", "recoveryErrorCode", "recoveryStage", "recoverySystemCode", "sessionHash", "turnHash"] as const) {
+    for (const key of ["systemCode", "httpStatus", "failureReason", "recordReason", "credentialReason", "configState", "commandExitCode", "commandSignal", "retryAfterMs", "processState", "cleanupErrorCode", "cleanupSystemCode", "recoveryErrorCode", "recoveryStage", "recoverySystemCode", "recoveryStatus", "installedVersion", "targetVersion", "causeDiagnosticId", "causeErrorCode", "causeStage", "recoveryDiagnosticId", "sessionHash", "turnHash"] as const) {
       if (record[key] !== undefined) console.log(`${key}: ${record[key]}`);
     }
     console.log(`Impact: ${record.impact}\nNext step: ${record.userAction}`);

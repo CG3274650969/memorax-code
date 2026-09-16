@@ -12,6 +12,8 @@ const STAGES = {
   setup_state: "Setup completion authority could not be validated.",
   reconcile: "The installed package could not complete setup reconciliation.",
   update_lock: "Automatic update authority could not be acquired or released.",
+  install_lock: "Package installation authority could not be acquired or released.",
+  recovery_authority: "Package recovery permission could not be validated.",
   update_state: "The next automatic update check could not be saved.",
   transition_lock: "Package transition authority could not be acquired or released.",
   transition_read: "The pending package transition could not be validated.",
@@ -23,6 +25,8 @@ const STAGES = {
   unknown: "The package update could not be completed.",
 };
 const CODE_MESSAGES = {
+  UPDATE_INSTALLED_PACKAGE_MISMATCH: "npm did not install the expected package at the current CLI location.",
+  PACKAGE_TRANSITION_ID_INVALID: "The package update attempt identity is invalid.",
   PACKAGE_TRANSITION_PENDING: "An earlier package transition is still pending.",
   PACKAGE_TRANSITION_NOT_RETIRED: "The old Backend has not completed retirement.",
   PACKAGE_TRANSITION_STALE: "The package transition is outside the unattended restoration window.",
@@ -34,13 +38,14 @@ const CODE_MESSAGES = {
 };
 const CODES = new Set([
   "UPDATE_FAILED", "UPDATE_VERSION_CHECK_FAILED", "UPDATE_VERSION_RESPONSE_INVALID",
-  "UPDATE_INSTALL_FAILED", "UPDATE_RECONCILE_FAILED", "UPDATE_STATE_WRITE_FAILED",
+  "UPDATE_INSTALL_FAILED", "UPDATE_INSTALLED_PACKAGE_MISMATCH", "UPDATE_RECONCILE_FAILED", "UPDATE_STATE_WRITE_FAILED",
+  "PACKAGE_TRANSITION_ID_INVALID",
   "UPDATE_SETUP_STATE_INVALID", "PACKAGE_TRANSITION_FAILED", "PACKAGE_TRANSITION_PENDING",
   "PACKAGE_TRANSITION_DURABILITY_UNCERTAIN", "PACKAGE_TRANSITION_PID_REMAINS",
   "PACKAGE_TRANSITION_REPLACED", "PACKAGE_TRANSITION_NOT_RETIRED", "PACKAGE_TRANSITION_STALE",
   "PACKAGE_TRANSITION_COMMAND_FAILED", "PACKAGE_TRANSITION_COMMAND_INVALID_JSON",
   "PACKAGE_TRANSITION_COMMAND_NOT_OK", "JSON_FILE_LOCK_TIMEOUT", "JSON_FILE_LOCK_RELEASE_FAILED",
-  ...["PACKAGE_TRANSITION_RECORD", "SETUP_COMPLETION_RECORD"].flatMap((prefix) =>
+  ...["PACKAGE_TRANSITION_RECORD", "SETUP_COMPLETION_RECORD", "PACKAGE_RECOVERY_PERMISSION"].flatMap((prefix) =>
     ["INVALID", "UNSUPPORTED", "ABSENT"].map((suffix) => `${prefix}_${suffix}`)),
 ]);
 const SYSTEM_CODES = new Set([
@@ -59,6 +64,7 @@ const RECORD_REASONS = new Set([
   "unreadable", "malformed_json", "invalid_record", "invalid_version", "invalid_state",
   "unknown_fields", "unknown_or_missing_fields", "invalid_transition_id", "invalid_started_at",
   "invalid_source_version", "invalid_retired_at", "invalid_completed_at", "invalid_completed_by_version",
+  "invalid_path", "invalid_parent_path", "revision_changed",
   "invalid_pid", "missing_instance_id", "invalid_instance_id", "invalid_host", "invalid_port",
   "invalid_url", "invalid_log_path", "invalid_token_path", "invalid_token", "invalid_created_at", "invalid_rotated_at",
 ]);
@@ -72,7 +78,7 @@ const SIGNALS = new Set(["SIGTERM", "SIGKILL", "SIGINT", "SIGABRT", "SIGHUP"]);
 const BACKEND_STAGES = new Set([
   "lock", "resolve_connection", "read_state", "resolve_token", "prepare_runtime", "spawn",
   "persist_pid", "health", "persist_token", "persist_connection", "verify_ownership",
-  "terminate", "wait_stopped", "cleanup_pid", "lifecycle",
+  "terminate", "wait_stopped", "cleanup_pid", "lifecycle", "recovery_authority",
 ]);
 const BACKEND_CODES = new Set([
   "BACKEND_LIFECYCLE_FAILED", "BACKEND_LIFECYCLE_LOCK_TIMEOUT", "BACKEND_LIFECYCLE_LOCK_FAILED",
@@ -80,10 +86,16 @@ const BACKEND_CODES = new Set([
   "BACKEND_SPAWN_FAILED", "BACKEND_SPAWN_PID_MISSING", "BACKEND_SERVICE_STATE_READ_FAILED",
   "BACKEND_SERVICE_STATE_WRITE_FAILED", "BACKEND_SERVICE_STATE_CLEANUP_FAILED", "BACKEND_TOKEN_WRITE_FAILED",
   "BACKEND_HEALTH_NOT_READY", "BACKEND_EXITED_BEFORE_READY", "BACKEND_CONNECTION_WRITE_FAILED", "BACKEND_OWNERSHIP_UNVERIFIED",
-  "BACKEND_TERMINATE_FAILED", "BACKEND_STOP_TIMEOUT",
-  ...["BACKEND_CONNECTION_AUTHORITY", "BACKEND_SERVICE_STATE", "BACKEND_PID_RECORD", "BACKEND_TOKEN_RECORD"].flatMap((prefix) =>
+  "BACKEND_TERMINATE_FAILED", "BACKEND_STOP_TIMEOUT", "PACKAGE_RECOVERY_PERMISSION_FAILED",
+  ...["BACKEND_CONNECTION_AUTHORITY", "BACKEND_SERVICE_STATE", "BACKEND_PID_RECORD", "BACKEND_TOKEN_RECORD", "PACKAGE_RECOVERY_PERMISSION"].flatMap((prefix) =>
     ["INVALID", "UNSUPPORTED", "ABSENT"].map((suffix) => `${prefix}_${suffix}`)),
 ]);
+const RECOVERY_MESSAGES = {
+  restored: "The installed Backend was restored and verified.",
+  failed: "Backend restoration did not complete; inspect the recovery failure.",
+  "not-attempted": "No matching retired transition was available for automatic restoration.",
+  "unsupported-package": "The installed package does not support guarded restoration; explicit recovery is required.",
+};
 const OPERATIONS = new Set(["update", "update.automatic", "update.recover", "install.retire", "install.restore"]);
 const RELAY_PATH = "MEMORAX_CODE_UPDATE_DIAGNOSTIC_PATH";
 const RELAY_NONCE = "MEMORAX_CODE_UPDATE_DIAGNOSTIC_NONCE";
@@ -135,13 +147,18 @@ export function reportUpdateFailure(error, { home, version, operation = "update"
       printFailure(fields, { ...diagnostic, ...(diagnostic.recorded ? { path: join(resolve(home), "runtime", "diagnostics", `${diagnostic.id}.json`) } : {}) }, write);
       relayUpdateDiagnostic({ fields, diagnostic });
     }
-    if (failure.recovery) reportUpdateFailure(failure.recovery, { home, version, operation, write });
-    return { children: failure.children };
+    if (!failure.recoveryStatus || failure.recoveryStatus === "not-attempted") {
+      if (failure.recovery) reportUpdateFailure(failure.recovery, { home, version, operation, write });
+      return { children: failure.children };
+    }
+    // Child records are immutable. Keep their IDs and link the final recovery
+    // outcome from an update diagnostic in the same store and retention policy.
   }
   const fields = updateFailureFields(failure, version ?? packageVersion(), operation);
   const diagnostic = writeDiagnosticRecord(home, fields);
   printFailure(fields, diagnostic, write);
   relayUpdateDiagnostic({ fields, diagnostic });
+  if (failure.recovery?.children?.length) reportUpdateFailure(failure.recovery, { home, version, operation, write });
   return { failure: fields, diagnostic };
 }
 
@@ -165,6 +182,26 @@ function updateFailureFields(failure, version, operation) {
   for (const key of ["systemCode", "recordReason", "failureReason", "commandExitCode", "commandSignal", "httpStatus"]) {
     if (failure[key] !== undefined) fields[key] = failure[key];
   }
+  for (const key of ["installedVersion", "targetVersion"]) {
+    if (typeof failure[key] === "string" && /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(failure[key])) fields[key] = failure[key];
+  }
+  if (Object.hasOwn(RECOVERY_MESSAGES, failure.recoveryStatus ?? "")) {
+    fields.recoveryStatus = failure.recoveryStatus;
+    if (failure.recoveryStatus === "restored") {
+      fields.impact = operation === "install.restore"
+        ? "The initial restoration failed, then the installed Backend was restored and verified."
+        : "The npm installation failed, but the installed Backend was restored and verified. The update remains incomplete.";
+      fields.userAction = operation === "install.restore"
+        ? "No action is required for this recovered failure; run memorax-code status to check current health."
+        : "Run memorax-code status, then retry the update to complete installation and setup.";
+    }
+  }
+  const cause = failure.children?.[0];
+  Object.assign(fields, projectCause(cause ? {
+    causeDiagnosticId: cause.diagnostic.id, causeErrorCode: cause.fields.errorCode, causeStage: cause.fields.stage,
+  } : failure));
+  const recoveryId = failure.recovery?.children?.[0]?.diagnostic.id ?? failure.recoveryDiagnosticId;
+  if (projectDiagnostic({ id: recoveryId, recorded: true })) fields.recoveryDiagnosticId = recoveryId;
   if (failure.recovery instanceof UpdateFailure) {
     fields.recoveryErrorCode = failure.recovery.code;
     fields.recoveryStage = failure.recovery.stage;
@@ -276,6 +313,11 @@ function printFailure(fields, diagnostic, write) {
   if (fields.retryAfterMs !== undefined) write(`Retry after: ${fields.retryAfterMs} ms`);
   if (fields.cleanupErrorCode) write(`Cleanup also failed: ${fields.cleanupErrorCode}${fields.cleanupSystemCode ? ` (${fields.cleanupSystemCode})` : ""}`);
   if (fields.recoveryErrorCode) write(`Follow-up also failed: [${fields.recoveryErrorCode}] ${fields.recoveryStage}${fields.recoverySystemCode ? ` (${fields.recoverySystemCode})` : ""}`);
+  if (fields.installedVersion) write(`Installed version: ${fields.installedVersion}`);
+  if (fields.targetVersion) write(`Target version: ${fields.targetVersion}`);
+  if (fields.causeDiagnosticId) write(`Original failure: [${fields.causeErrorCode}] ${fields.causeStage}; diagnostic ${fields.causeDiagnosticId}`);
+  if (fields.recoveryStatus) write(`Recovery: ${RECOVERY_MESSAGES[fields.recoveryStatus]}`);
+  if (fields.recoveryDiagnosticId) write(`Recovery diagnostic: ${fields.recoveryDiagnosticId}`);
   write(`Impact: ${fields.impact}`);
   write(`Next step: ${fields.userAction}`);
   write(`Diagnostic: ${diagnostic.id}`);
@@ -322,6 +364,11 @@ export function projectUpdateDiagnosticMessage(message) {
     if (CODES.has(value.recoveryErrorCode) && Object.hasOwn(STAGES, value.recoveryStage)) {
       failure.recovery = new UpdateFailure(value.recoveryErrorCode, value.recoveryStage, { systemCode: value.recoverySystemCode });
     }
+    if (Object.hasOwn(RECOVERY_MESSAGES, value.recoveryStatus ?? "")) failure.recoveryStatus = value.recoveryStatus;
+    Object.assign(failure, projectCause(value));
+    failure.installedVersion = value.installedVersion;
+    failure.targetVersion = value.targetVersion;
+    if (projectDiagnostic({ id: value.recoveryDiagnosticId, recorded: true })) failure.recoveryDiagnosticId = value.recoveryDiagnosticId;
     return { fields: updateFailureFields(failure, value.version, value.operation), diagnostic };
   }
   const report = message.fields?.client
@@ -349,6 +396,16 @@ function lifecycleDiagnostics(command) {
     children.push({ fields, diagnostic });
   }
   return children;
+}
+
+function projectCause(value) {
+  if (!projectDiagnostic({ id: value?.causeDiagnosticId, recorded: true })) return {};
+  const fields = { errorCode: value.causeErrorCode, stage: value.causeStage };
+  const known = (CODES.has(fields.errorCode) && Object.hasOwn(STAGES, fields.stage))
+    || (BACKEND_CODES.has(fields.errorCode) && BACKEND_STAGES.has(fields.stage))
+    || projectDeploymentFailure(fields)
+    || projectSetupFailure({ ...fields, source: "memorax-code-setup", operation: "setup" });
+  return known ? { causeDiagnosticId: value.causeDiagnosticId, causeErrorCode: fields.errorCode, causeStage: fields.stage } : {};
 }
 
 function projectDiagnostic(value) {

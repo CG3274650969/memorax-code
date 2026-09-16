@@ -32,6 +32,7 @@ const BACKEND_RECORD_FAILURE_REASONS = new Set([
   "invalid_pid", "missing_instance_id", "invalid_instance_id", "invalid_host", "invalid_port",
   "invalid_url", "invalid_log_path", "invalid_started_at", "invalid_token_path", "invalid_token",
   "invalid_created_at", "invalid_rotated_at",
+  "invalid_path", "invalid_parent_path", "revision_changed",
 ]);
 
 export function runtimeRecordErrorFields(error: unknown): Pick<BackendServiceResult, "errorCode" | "recordReason"> {

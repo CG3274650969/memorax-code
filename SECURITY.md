@@ -61,6 +61,11 @@ Please allow time for triage and remediation before public disclosure.
   records fail closed instead of silently treating a partial setup or
   interrupted package replacement as complete. The automatic-update record
   controls only cadence across Backend process replacement.
+- Package recovery permission is private, versioned authority protected by the
+  Backend lifecycle lock. Ordinary stop, restart and uninstall replace it with
+  a new stopped revision. Automatic restoration must match the exact transition
+  and cannot revive permission revoked by a later stop. Explicit recovery is
+  a new user request and can restore supported legacy transition records.
 - The managed OpenCode plugin may recover an unavailable Backend only through
   its package-recorded Node runtime and absolute `memorax-code` command, and
   the currently resolved loopback HTTP authority. It preserves the existing

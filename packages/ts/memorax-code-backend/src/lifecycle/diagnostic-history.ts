@@ -35,6 +35,8 @@ const OPTIONAL_STRINGS = [
   "client", "sessionHash", "turnHash", "systemCode", "failureReason", "recordReason",
   "credentialReason", "commandSignal", "cleanupErrorCode", "cleanupSystemCode",
   "recoveryErrorCode", "recoveryStage", "recoverySystemCode",
+  "causeDiagnosticId", "causeErrorCode", "causeStage", "recoveryDiagnosticId",
+  "installedVersion", "targetVersion",
 ] as const;
 type DirectoryIdentity = { path: string; stat: Stats };
 
@@ -183,6 +185,10 @@ function projectRecord(raw: unknown, id: string): DiagnosticRecord {
     if (input[key] === undefined) continue;
     if (typeof input[key] !== "number" || !Number.isFinite(input[key])) throw new DiagnosticReadError("DIAGNOSTIC_RECORD_INVALID");
     record[key] = input[key];
+  }
+  if (input.recoveryStatus !== undefined) {
+    if (typeof input.recoveryStatus !== "string" || !["restored", "failed", "not-attempted", "unsupported-package"].includes(input.recoveryStatus)) throw new DiagnosticReadError("DIAGNOSTIC_RECORD_INVALID");
+    record.recoveryStatus = input.recoveryStatus as DiagnosticRecordFields["recoveryStatus"];
   }
   if (input.configState !== undefined) {
     if (typeof input.configState !== "string" || !["preserved", "restored", "removed", "unknown"].includes(input.configState)) throw new DiagnosticReadError("DIAGNOSTIC_RECORD_INVALID");

@@ -271,7 +271,7 @@ before sharing the content-free diagnostic.
 
 Replacing a running managed installation uses
 `$MEMORAX_CODE_HOME/runtime/install/package-transition.json`. If preinstall
-cannot retire the old Backend, installation stops before package replacement.
+cannot retire the old Backend, npm reports failure and owns package-file rollback.
 If postinstall cannot start or verify the new Backend, the retired transition
 is retained for recovery.
 
@@ -289,12 +289,30 @@ their original IDs. These records share the
 | `restore` | The installed Backend could not be started for restoration. |
 | `verify` | The restored Backend did not pass the required status check. |
 | `consume` | Verification completed, but the transition record could not be consumed. Check status before retrying. |
+| `recovery_authority` | Recovery permission could not be validated or saved. `revision_changed` means a later lifecycle operation revoked the old attempt. |
 
 Lock acquisition/release and update or transition state reads/writes have their
 own stages. A separate failed recovery retains `recoveryErrorCode`,
 `recoveryStage`, and an available `recoverySystemCode`; the original error remains
-the primary diagnosis. Do not infer successful recovery solely from package
-installation or a preceding command's success.
+the primary diagnosis. Postinstall retries a recoverable start or status failure
+once, without repeating a successful start for a failed status check. After npm
+exits unsuccessfully, the update command can restore only its own retired
+transition using an installed package that supports guarded recovery.
+
+The diagnostic `recoveryStatus` distinguishes `restored`, `failed`,
+`not-attempted` (no matching retired transition), and `unsupported-package`.
+A restored Backend does not make a failed npm installation successful. The update
+still exits with failure and must be retried to complete installation and setup.
+An intervening user stop, restart or uninstall revokes the old update's recovery
+permission. A pre-existing transition requires inspection and explicit recovery;
+its age alone does not prove the original installer has exited.
+
+Original child diagnostics remain immutable. A recovery summary links the first
+cause through `causeDiagnosticId`, `causeErrorCode` and `causeStage`; a
+failed recovery can also link `recoveryDiagnosticId`. All records use the same
+`status` and `logs --diagnostics` history. Inspect a linked record with
+`memorax-code logs --id <diagnostic-id>`. Do not infer successful recovery solely
+from package installation or a preceding command's success.
 
 After the original npm command has exited and the reported startup or status
 problem is corrected, resume restoration of the installed package:

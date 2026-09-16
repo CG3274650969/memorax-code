@@ -180,7 +180,13 @@ while it remains running. It reads the next deadline from the private update
 record, so an active Backend continues checking even when the user stays in one
 client session. Stable installations follow npm `latest`; prerelease
 installations follow `preview`. A successful result is reused for eight hours,
-while a failed check, install, or reconciliation retries after 15 minutes. Set
+while a failed check, install, or reconciliation retries after 15 minutes. Local
+scheduling checks run at intervals of at most 15 minutes to detect pending package
+transitions without waiting for the eight-hour window. These local checks do not
+themselves query npm; when no transition is pending, registry checks follow the
+persisted deadline. A Backend started during package restoration defers its
+initial check so a normal installation can consume its transition first. Pending
+transitions produce recovery guidance rather than an unowned automatic restart. Set
 `MEMORAX_CODE_AUTO_UPDATE=false` before starting or restarting the managed
 Backend to disable the scheduler. Client startup Hooks only recover an
 unavailable Backend and do not schedule updates.
@@ -231,6 +237,27 @@ disabled; restoration invokes `start` with the retained client selection.
 Fresh or stopped installations without retained DSH state remain stopped.
 Direct npm installation does not run foreground setup. Do not edit these
 runtime records by hand.
+
+Postinstall retries a recoverable start or status failure once. Manual and
+automatic update commands also share an installation lock and can attempt
+restoration after their own npm child exits unsuccessfully. Service recovery
+does not turn a failed package update into success. If npm left a different
+installed version, the automatic retry deadline uses that version instead of
+assuming that package files were rolled back.
+
+Automatic restoration requires permission for that exact transition, stored in
+`runtime/install/package-recovery.json`. Ordinary stop, restart and uninstall
+revoke it under the lifecycle lock. An update observes that revision before
+retirement, so its retirement and restoration respect an intervening user stop.
+An older installed package without the recovery protocol is not automatically
+started by the new updater after a rollback.
+
+Manual and automatic update commands reject a pre-existing transition before
+invoking npm, including when there is no Backend PID. They do not infer that an
+old installation exited from the record's age. Update failures and recovery
+outcomes use the shared [default diagnostic storage](#default-searchadd-diagnostics),
+without requiring Debug. Recovery summaries link the original diagnostic IDs;
+these records are never lifecycle authority.
 
 After a failed restoration, `memorax-code update --recover [--home DIR]` resumes
 the installed package's start and status checks under the same transition lock.

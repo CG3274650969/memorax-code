@@ -19,6 +19,8 @@ const memoraxCodeHome = process.env.MEMORAX_CODE_HOME?.trim() || join(homedir(),
 try {
   const result = await runNpmPostinstallPackageTransition({
     memoraxCodeHome,
+    expectedTransitionId: process.env.MEMORAX_CODE_PACKAGE_TRANSITION_ID?.trim() || undefined,
+    retryRestore: true,
     memoraxCodeBin: join(scriptDir, "memorax-code.mjs"),
   });
   if (result.disposition === "restored") {

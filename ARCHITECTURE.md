@@ -275,8 +275,8 @@ sequenceDiagram
   Setup->>Completion: commit only after final verification
 
   loop completed setup while managed Backend remains running
-    Service->>Update: dispatch when durable deadline is due
-    Update->>Update: lock, recheck cadence, resolve channel target
+    Service->>Update: dispatch when due or a pending transition needs diagnosis
+    Update->>Update: lock, validate pending state, recheck cadence, resolve channel target
     opt target version differs
       Update->>NPM: install exact published target
       Note over NPM,Lifecycle: Uses the package replacement path above
@@ -302,6 +302,28 @@ and its lock for the already installed package. The user's recovery request
 permits an expired retired record; unattended npm restoration retains its
 freshness limit. Both paths reject incomplete retirement, invalid records, and
 future timestamps, and consume state only after successful start and status.
+
+Manual and automatic updates share an npm installation wrapper and an installation
+lock, separate from the transition lock acquired by npm's child scripts. The
+wrapper supplies an attempt ID, waits for npm to exit, and can restore only its
+own retired transition. A failed npm result remains failed even if service is
+restored. Recovery uses the package actually present after npm exits and requires
+its declared recovery protocol; rollback to an older unsupported CLI cannot
+authorize an automatic restart.
+
+The private `package-recovery.json` record is protected by the Backend lifecycle
+lock. Retirement checks the previously observed stop revision and, on success,
+grants permission for that transition ID. Ordinary stop, restart and uninstall
+replace it with a new stopped revision. Restoration validates permission inside
+the same lifecycle lock, so this restoration cannot undo a later user stop.
+The revision and attempt are removed from the environment before spawning the
+Backend. npm postinstall retries a recoverable failed start or status once,
+without repeating a successful start merely because status failed. Unknown
+historical transitions require explicit recovery; record age alone does not
+prove that the installing process exited.
+Update failures and final recovery outcomes use the shared immutable diagnostic
+store. Recovery summaries link child diagnostic IDs without rewriting their
+original records; default status and diagnostic-history queries expose both.
 
 Public `memorax-code setup` owns disclosure, preferences, credential
 provisioning or entry, client discovery, initial Hook activation, and Backend
@@ -342,7 +364,10 @@ installation fails and removes it afterward. Relay creation, reading, writing, a
 effort and cannot replace the installation outcome.
 
 After completed setup, the managed Backend schedules a detached updater from
-the durable deadline; client startup Hooks only recover an unavailable Backend.
+the durable deadline, with bounded local wakeups to detect pending transitions
+independently of the registry check window. The updater validates those records;
+the scheduler only observes their presence and preserves restoration deferral and
+failure backoff. Client startup Hooks only recover an unavailable Backend.
 The updater serializes checks through its private record and lock, installs an
 exact target from the installed release channel, and reuses non-interactive
 setup reconciliation. It preserves explicit client choices and configuration.
