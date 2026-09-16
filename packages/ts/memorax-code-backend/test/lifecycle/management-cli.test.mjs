@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createBackendState } from "../../dist/app/state.js";
 import { runBackendStatus } from "../../dist/lifecycle/backend/status.js";
 import { createBackendServer } from "../../dist/server.js";
@@ -927,5 +927,33 @@ test("memorax-code-backend rejects management commands", async () => {
     const result = await runCli(cliPath, [command]);
     assert.equal(result.code, 1, command);
     assert.match(result.stderr, new RegExp(`memorax-code-backend: unknown command '${command}'`));
+  }
+});
+
+test("lifecycle reports drain buffered stdout before the CLI exits", async () => {
+  const root = await mkdtemp(join(tmpdir(), "memorax-code-lifecycle-output-"));
+  const home = join(root, "home");
+  const cliPath = fileURLToPath(new URL("../../dist/memorax-code.js", import.meta.url));
+  const port = await freePort();
+  const args = ["--json", "--home", home, "--port", String(port), "--clients", "none"];
+  const preload = join(root, "slow-stdout.mjs");
+  await writeFile(preload, `
+    const write = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (...args) => {
+      setTimeout(() => write(...args), 25);
+      return true;
+    };
+  `);
+  try {
+    for (const command of ["start", "restart", "stop", "uninstall"]) {
+      const result = await runCli(cliPath, [command, ...args], {
+        env: { NODE_OPTIONS: "--import=" + pathToFileURL(preload).href },
+      });
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(JSON.parse(result.stdout).ok, true, command);
+    }
+  } finally {
+    await runCli(cliPath, ["stop", ...args]);
+    await rm(root, { recursive: true, force: true });
   }
 });

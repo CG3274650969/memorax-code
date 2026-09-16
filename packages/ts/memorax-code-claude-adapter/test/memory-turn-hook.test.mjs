@@ -124,7 +124,8 @@ test("Claude UserPromptSubmit starts Repo Memory build for the Backend-authorize
     });
   } finally {
     await recorder.close();
-    await rm(root, { recursive: true, force: true });
+    // The detached fixture can write its result before Windows releases its cwd.
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 

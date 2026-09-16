@@ -24,6 +24,10 @@ import {
   withDshPluginLifecycleLock,
 } from "../src/profile-lifecycle.mjs";
 
+const npmCommand = process.platform === "win32"
+  ? [process.execPath, process.env.npm_execpath ?? join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")]
+  : ["npm"];
+
 const HEADLESS_BUNDLE_NAME = "@deepseek-ai/dsh-headless";
 
 test("failed reconciliation restores the prior authority and removes newly installed Profiles", async (t) => {
@@ -448,6 +452,7 @@ test("quiesce publishes the inert authority without invoking DSH or removing Pro
     dshHome,
     memoraxCodeHome,
     adapterRoot: join(root, "removed-package", "lib", "memorax-code-dsh-adapter"),
+    windowsCliResolution: { resolvedCommand: "fixture-dsh.exe" },
     runDsh: (invocation) => {
       removalInvocation = invocation;
       const manifest = JSON.parse(readFileSync(profileManifestPath, "utf8"));
@@ -850,6 +855,7 @@ test("managed DSH discovery failures are not optional skips", async (t) => {
     adapterRoot,
     dshHome,
     memoraxCodeHome,
+    windowsCliResolution: { resolvedCommand: "fixture-dsh.exe" },
     runDsh: () => ({ status: 1, error: Object.assign(new Error("missing dsh"), { code: "ENOENT" }) }),
   }, (lifecycle) => lifecycle.ensureInstalled({ enabled: false }));
   assert.equal(unavailable.ok, false);
@@ -878,6 +884,7 @@ test("an unmanaged existing Profile does not hide an unavailable DSH command", a
     adapterRoot: join(root, "adapter"),
     dshHome,
     memoraxCodeHome: join(root, "memorax-code-home"),
+    windowsCliResolution: { resolvedCommand: "fixture-dsh.exe" },
     runDsh: () => ({ status: 1, error: Object.assign(new Error("missing dsh"), { code: "ENOENT" }) }),
   }, (lifecycle) => lifecycle.ensureInstalled({ enabled: false }));
   assert.equal(report.ok, false);
@@ -898,6 +905,7 @@ test("reports pnpm missing from DSH's native Profile plugin manager", async (t) 
     adapterRoot,
     dshHome,
     memoraxCodeHome,
+    windowsCliResolution: { resolvedCommand: "fixture-dsh.exe" },
     runDsh(invocation) {
       return invocation.args[0] === "--version"
         ? { status: 0, stdout: "0.1.0-rc.6\n" }
@@ -937,6 +945,7 @@ test("reports pnpm missing from DSH's native Profile plugin manager", async (t) 
   try {
     await assert.rejects(withDshPluginLifecycleLock({
       adapterRoot, dshHome, memoraxCodeHome, memoraxCodeCommand: join(root, "next-cli.mjs"),
+      windowsCliResolution: { resolvedCommand: "fixture-dsh.exe" },
       runDsh: () => ({ status: 0, stdout: "0.1.0-rc.6\n" }),
     }, (lifecycle) => lifecycle.ensureInstalled({ enabled: false })), (error) => {
       assert.equal(error, publishError);
@@ -1001,8 +1010,9 @@ test("uses the DSH runtime already linked by Profiles and refreshes it on reconc
     dshHome,
     memoraxCodeHome,
     memoraxCodeCommand: join(root, "memorax-code.mjs"),
+    windowsCliResolution: { whereOutput: "fixture-dsh.exe" },
     runDsh(invocation) {
-      if (invocation.command === "dsh") {
+      if (invocation.command === "dsh" || invocation.command === "fixture-dsh.exe" && invocation.args[0] === "--version") {
         directProbeCalls += 1;
         assert.deepEqual(invocation.args, ["--version"]);
         if (directDshVersion) {
@@ -1014,8 +1024,8 @@ test("uses the DSH runtime already linked by Profiles and refreshes it on reconc
         };
       }
       assert.equal(invocation.command, process.execPath);
-      assert.equal(invocation.args[0], dshEntrypoint);
-      const dshArgs = invocation.args.slice(1);
+      const dshArgs = dshArguments(invocation);
+      assert(invocation.args.includes(dshEntrypoint));
       assert.deepEqual(
         [dshArgs[0], dshArgs[1], dshArgs[3]],
         ["plugin", "--profile", "add"],
@@ -1032,7 +1042,8 @@ test("uses the DSH runtime already linked by Profiles and refreshes it on reconc
       addCalls += 1;
       const runtimeBundleRoot = dshArgs[4].slice("file:".length);
       if (packedFiles === undefined) {
-        const pack = spawnSync("npm", [
+        const pack = spawnSync(npmCommand[0], [
+          ...npmCommand.slice(1),
           "pack",
           runtimeBundleRoot,
           "--json",
@@ -1041,7 +1052,8 @@ test("uses the DSH runtime already linked by Profiles and refreshes it on reconc
         assert.equal(pack.status, 0, pack.stderr);
         packedFiles = JSON.parse(pack.stdout)[0].files.map(({ path }) => path).sort();
       }
-      const install = spawnSync("npm", [
+      const install = spawnSync(npmCommand[0], [
+        ...npmCommand.slice(1),
         "install",
         "--ignore-scripts",
         "--no-audit",
@@ -1208,6 +1220,7 @@ async function createReconciliationFixture(t) {
     dshHome,
     memoraxCodeHome,
     memoraxCodeCommand: join(root, "memorax-code-v1.mjs"),
+    windowsCliResolution: { resolvedCommand: "fixture-dsh.exe" },
     runDsh(invocation) {
       if (invocation.args[0] === "--version") return { status: 0, stdout: "0.1.0-rc.6\n" };
       installAdapter(invocation.args[2], invocation.args[4].slice("file:".length));

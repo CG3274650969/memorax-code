@@ -1,3 +1,4 @@
+import { nativeCliCommand, writeNativeCliFixture } from "../../../../../test/support/native-cli-fixture.mjs";
 import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -31,7 +32,7 @@ test("package-removal cleanup is prepared before shutdown and removes all client
     ".codex-plugin",
     "plugin.json",
   );
-  const claudeCommand = join(root, "fake-claude.mjs");
+  const claudeCommand = nativeCliCommand(root, "claude");
   const claudeCalls = join(root, "claude-calls.jsonl");
   const dshHome = join(home, "dsh-home");
   const dshAdapterRoot = join(root, "removed-dsh-adapter");
@@ -115,7 +116,7 @@ test("package-removal cleanup is prepared before shutdown and removes all client
     }, null, 2)}\n`);
     const traeInstall = await enableTraeAdapter({ memoraxCodeHome, traeHome });
     assert.equal(traeInstall.ok, true);
-    await writeFile(claudeCommand, `#!/usr/bin/env node
+    await writeNativeCliFixture(claudeCommand, "claude", `#!/usr/bin/env node
 import { appendFileSync } from "node:fs";
 appendFileSync(${JSON.stringify(claudeCalls)}, JSON.stringify(process.argv.slice(2)) + "\\n");
 `);
@@ -136,7 +137,7 @@ writeFileSync(path, JSON.stringify(manifest, null, 2) + "\\n");
     const cleanup = await prepareClientPluginRemovalCleanup({
       memoraxCodeHome,
       homeDir: home,
-      codexCommand: join(root, "missing-codex"),
+      codexCommand: join(root, process.platform === "win32" ? "missing-codex.exe" : "missing-codex"),
       claudeCommand,
       dshHome,
       dshAdapterRoot,

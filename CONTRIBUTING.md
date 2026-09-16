@@ -13,7 +13,11 @@ so PowerShell alone is insufficient. Use macOS or Linux for these examples.
 If using WSL on Windows, keep the checkout and Node, npm, Git, and Python in
 the Linux environment; those results cover Linux behavior, not native Windows.
 Native Windows checks use Windows Node.js and PowerShell 7+ where required by
-the platform scripts. See [Validation](#validation) for their scope.
+the platform scripts. Shared Skill provider-response fixtures also require Git
+for Windows with Bash available alongside Git. Run native Windows tests without
+`--test-force-exit`: forced test-runner shutdown can abort Node while Windows
+handles are closing. Keep per-test timeouts and let processes exit normally.
+See [Validation](#validation) for their scope.
 
 ```bash
 git status --short --branch

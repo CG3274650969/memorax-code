@@ -1,3 +1,4 @@
+import { providerFixtureEnv } from "./support/provider-cli-fixture.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -296,13 +297,13 @@ test("repo-memory-updater detects only local commits after the stored memory bas
     assert.equal(report.ok, true);
     assert.equal(report.memory_path, realpathSync(memory));
     assert.deepEqual(report.effective_settings.limits, { prs: 30, issues: 30 });
-    assert.match(report.effective_settings.source, /memorax-code\/defaults\.json$/);
+    assert.match(report.effective_settings.source, /memorax-code[/\\]defaults\.json$/);
     assert.deepEqual(report.effective_settings.overrides, {});
     assert.match(report.builder_helpers.skill_dir, /memorax-code$/);
-    assert.match(report.builder_helpers.files.defaults.path, /memorax-code\/defaults\.json$/);
+    assert.match(report.builder_helpers.files.defaults.path, /memorax-code[/\\]defaults\.json$/);
     assert.equal(report.builder_helpers.files.defaults.exists, true);
     assert.equal("build_indexes" in report.builder_helpers.files, false);
-    assert.match(report.builder_helpers.files.validate_memory.path, /memorax-code\/scripts\/repo-memory\.mjs$/);
+    assert.match(report.builder_helpers.files.validate_memory.path, /memorax-code[/\\]scripts[/\\]repo-memory\.mjs$/);
     assert.equal(report.builder_helpers.files.validate_memory.exists, true);
     assert.equal(typeof report.builder_helpers.files.validate_memory.mtime_ns, "number");
     assert.ok(report.builder_helpers.files.validate_memory.mtime_ns > 0);
@@ -445,9 +446,8 @@ test("repo-memory-updater skips commit and provider deltas when repoHistory mode
       cwd: packageRoot,
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...providerFixtureEnv(bin),
         MEMORAX_CODE_REPO_MEMORY_SKILL_DIR: tempSkillRoot,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
       },
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -521,9 +521,8 @@ test("repo-memory-updater keeps local commits but skips providers when repoHisto
       cwd: packageRoot,
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...providerFixtureEnv(bin),
         MEMORAX_CODE_REPO_MEMORY_SKILL_DIR: tempSkillRoot,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
       },
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -585,8 +584,7 @@ test("repo-memory-updater compares provider PR and issue resources incrementally
       cwd: packageRoot,
       encoding: "utf8",
       env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        ...providerFixtureEnv(bin),
         BASELINE_SHA: baselineSha,
       },
     });
@@ -680,8 +678,7 @@ exit 2
       cwd: packageRoot,
       encoding: "utf8",
       env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        ...providerFixtureEnv(bin),
       },
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -758,8 +755,7 @@ exit 2
       cwd: packageRoot,
       encoding: "utf8",
       env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        ...providerFixtureEnv(bin),
       },
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -810,8 +806,7 @@ test("repo-memory-updater preserves baseline-only numbers when provider fetch re
       cwd: packageRoot,
       encoding: "utf8",
       env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        ...providerFixtureEnv(bin),
       },
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -924,8 +919,7 @@ exit 2
       cwd: packageRoot,
       encoding: "utf8",
       env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        ...providerFixtureEnv(bin),
       },
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -993,8 +987,7 @@ test("repo-memory-updater uses raw provider facets to detect metadata-only updat
       cwd: packageRoot,
       encoding: "utf8",
       env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        ...providerFixtureEnv(bin),
         BASELINE_SHA: baselineSha,
       },
     });
@@ -1061,8 +1054,7 @@ test("repo-memory-updater compares provider deltas against raw facets before edi
       cwd: packageRoot,
       encoding: "utf8",
       env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        ...providerFixtureEnv(bin),
         BASELINE_SHA: baselineSha,
       },
     });
@@ -1211,8 +1203,7 @@ exit 2
       cwd: packageRoot,
       encoding: "utf8",
       env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        ...providerFixtureEnv(bin),
         GH_AUTH_COUNTER: authCounter,
       },
     });

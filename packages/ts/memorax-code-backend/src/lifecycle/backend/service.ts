@@ -417,8 +417,12 @@ async function stopFailedBackendStart(
       ...(systemCode ? { cleanupSystemCode: systemCode } : {}),
     };
   }
-  if (!terminated) return { processState: "unknown", cleanupErrorCode: "BACKEND_TERMINATE_FAILED" };
   const processAlive = runtime.isProcessAlive ?? isProcessAlive;
+  // The child may exit on its own while taskkill (or a signal) is being dispatched.
+  // A failed termination request does not require retaining a now-stopped PID.
+  if (!terminated && processAlive(pid)) {
+    return { processState: "unknown", cleanupErrorCode: "BACKEND_TERMINATE_FAILED" };
+  }
   await waitUntilStopped(pid, timeoutMs, processAlive);
   return processAlive(pid)
     ? { processState: "running", cleanupErrorCode: "BACKEND_STOP_TIMEOUT" }

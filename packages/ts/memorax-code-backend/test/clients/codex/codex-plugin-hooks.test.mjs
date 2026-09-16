@@ -1,3 +1,4 @@
+import { nativeCliCommand, writeNativeCliFixture } from "../../../../../../test/support/native-cli-fixture.mjs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -43,8 +44,8 @@ function assertHookFailure(result, stage, expectedReason) {
 }
 
 async function createFakeCodex(root) {
-  const path = join(root, "fake-codex.mjs");
-  await writeFile(path, `#!/usr/bin/env node
+  const path = nativeCliCommand(root, "codex");
+  await writeNativeCliFixture(path, "codex", `#!/usr/bin/env node
 import { createInterface } from "node:readline";
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";

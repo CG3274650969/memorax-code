@@ -355,7 +355,7 @@ async function fixture(t) {
     [join(packageRoot, "lib", "update-diagnostics.mjs"), "lib/update-diagnostics.mjs"],
     [join(packageRoot, "lib", "setup-diagnostics.mjs"), "lib/setup-diagnostics.mjs"],
     [join(packageRoot, "lib", "npm-invocation.mjs"), "lib/npm-invocation.mjs"],
-    ...["config-utils.mjs", "diagnostic-record.mjs", "deployment-failure.mjs", "automatic-update-state.mjs", "runtime-record.mjs", "package-recovery.mjs", "setup-completion.mjs"]
+    ...["config-utils.mjs", "diagnostic-record.mjs", "deployment-failure.mjs", "automatic-update-state.mjs", "runtime-record.mjs", "windows-directory-retry.mjs", "package-recovery.mjs", "setup-completion.mjs"]
       .map((name) => [join(commonRoot, name), `lib/memorax-code-adapter-common/src/${name}`]),
   ];
   await Promise.all(files.map(async ([source, relativeTarget]) => {

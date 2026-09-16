@@ -1,11 +1,11 @@
 import { strict as assert } from "node:assert";
 import { spawn, spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { after, before, test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const runtimeHookPath = join(packageRoot, "hooks", "runtime-hook.mjs");
@@ -172,7 +172,21 @@ test("one unreadable procedure file does not hide other valid topics", async () 
     await writeRegistry(memoraxCodeHome, "native-thread");
     await writeProcedure(repo, "reading-code.md", "# Reading Code\n\n1. Keep this valid topic visible.");
     await writeProcedure(repo, "writing-code.md", "# Writing Code\n\n1. This topic cannot be read.");
-    await chmod(join(repo, ".repo_memory", "procedure-memory", "writing-code.md"), 0o000);
+    // chmod does not revoke access on Windows or for a POSIX root user.
+    const unreadablePath = join(repo, ".repo_memory", "procedure-memory", "writing-code.md");
+    const preload = join(root, "unreadable-procedure.mjs");
+    await writeFile(preload, `
+      import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      const read = fs.readFileSync;
+      fs.readFileSync = (path, ...args) => {
+        if (path === ${JSON.stringify(unreadablePath)}) {
+          throw Object.assign(new Error("fixture access denied"), { code: "EACCES" });
+        }
+        return read(path, ...args);
+      };
+      syncBuiltinESMExports();
+    `);
 
     const result = await runHook(hookPath, {
       hook_event_name: "UserPromptSubmit",
@@ -181,7 +195,10 @@ test("one unreadable procedure file does not hide other valid topics", async () 
       transcript_path: "/tmp/native-thread.jsonl",
       cwd: repo,
       prompt: "first prompt",
-    }, { MEMORAX_CODE_HOME: memoraxCodeHome });
+    }, {
+      MEMORAX_CODE_HOME: memoraxCodeHome,
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, "--import=" + pathToFileURL(preload).href].filter(Boolean).join(" "),
+    });
     const context = reminderContext(result.stdout);
     assert.match(context, /Keep this valid topic visible/);
     assert.doesNotMatch(context, /This topic cannot be read/);

@@ -826,7 +826,7 @@ test("current Backend health instance mismatch fails closed despite a matching p
       },
     });
     assert.equal(result.ok, false);
-    assert.match(result.error, /refusing to stop unverified process/);
+    assert.match(result.error, /refusing to (?:stop unverified process|force-stop process .*health identity conflicts)/);
     assert.equal(terminated, false);
   } finally {
     await rm(home, { recursive: true, force: true });
@@ -925,6 +925,31 @@ test("failed startup retains PID state when cleanup fails or the PID remains ali
         await rm(home, { recursive: true, force: true });
       }
     });
+  }
+});
+
+test("failed startup clears PID state when the child exits during termination", async () => {
+  const home = await mkdtemp(join(tmpdir(), "memorax-code-startup-exited-during-cleanup-"));
+  let alive = true;
+  try {
+    const result = await startBackendService({ home, timeoutMs: 0 }, {
+      isProcessAlive: () => alive,
+      terminateProcessTree: () => { alive = false; return false; },
+      spawnProcess: () => {
+        const child = new EventEmitter();
+        child.pid = 4242;
+        child.unref = () => undefined;
+        process.nextTick(() => child.emit("spawn"));
+        return child;
+      },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.errorCode, "BACKEND_HEALTH_NOT_READY");
+    assert.equal(result.processState, "stopped");
+    assert.equal(result.cleanupErrorCode, undefined);
+    assert.equal(readBackendServiceState({ home }), undefined);
+  } finally {
+    await rm(home, { recursive: true, force: true });
   }
 });
 

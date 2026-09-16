@@ -143,6 +143,10 @@ test("derives the install cache version from the CodeBuddy plugin manifest", asy
     join(root, "memorax-code-adapter-common", "src", "runtime-record.mjs"),
   );
   await cp(
+    new URL("../../memorax-code-adapter-common/src/windows-directory-retry.mjs", import.meta.url),
+    join(root, "memorax-code-adapter-common", "src", "windows-directory-retry.mjs"),
+  );
+  await cp(
     new URL("../../memorax-code-adapter-common/src/file-tree-match.mjs", import.meta.url),
     join(root, "memorax-code-adapter-common", "src", "file-tree-match.mjs"),
   );

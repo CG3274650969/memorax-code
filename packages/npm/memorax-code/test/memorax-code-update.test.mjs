@@ -28,6 +28,7 @@ async function createPackageFixture(version) {
     "config-utils.mjs", "diagnostic-record.mjs", "deployment-failure.mjs",
     "automatic-update-state.mjs",
     "runtime-record.mjs",
+    "windows-directory-retry.mjs",
     "package-recovery.mjs",
     "setup-completion.mjs",
   ]) {

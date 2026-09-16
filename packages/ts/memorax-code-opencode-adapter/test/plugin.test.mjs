@@ -220,7 +220,8 @@ test("chat.message starts missing Repo Memory for the Backend-authorized worktre
   } finally {
     process.execPath = nodePath;
     await hooks?.dispose();
-    await rm(root, { recursive: true, force: true });
+    // The detached fixture can write its result before Windows releases its cwd.
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
