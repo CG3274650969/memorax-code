@@ -598,7 +598,7 @@ test("memorax-code keeps Codex and Backend healthy after a managed Claude runtim
 
     const missingEnv = {
       ...availableEnv,
-      MEMORAX_CODE_CLAUDE_COMMAND: join(home, "missing-claude"),
+      MEMORAX_CODE_CLAUDE_COMMAND: join(home, process.platform === "win32" ? "missing-claude.exe" : "missing-claude"),
     };
     const restarted = await runCli(cliPath, ["start", "--json", ...commonArgs], { env: missingEnv });
     assert.equal(restarted.code, 0, `${restarted.stdout}\n${restarted.stderr}`);

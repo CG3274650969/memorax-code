@@ -1,10 +1,11 @@
+import { nativeCliCommand, writeNativeCliFixture } from "../../../../../../test/support/native-cli-fixture.mjs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs, { chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -145,12 +146,12 @@ test("codex-plugin install uses CODEX_HOME and registers the personal marketplac
   const root = await mkdtemp(join(tmpdir(), "memorax-code-codex-plugin-install-"));
   const home = join(root, "home");
   const codexHome = join(home, "codex-home");
-  const codexCommand = join(root, "Codex.app", "Contents", "Resources", "codex");
+  const codexCommand = process.platform === "win32" ? nativeCliCommand(root, "codex") : join(root, "Codex.app", "Contents", "Resources", "codex");
   const npmExecPath = join(root, "npm-cli.js");
   try {
     await mkdir(home, { recursive: true });
     await mkdir(join(root, "Codex.app", "Contents", "Resources"), { recursive: true });
-    await writeFile(codexCommand, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    await writeNativeCliFixture(codexCommand, "codex", "#!/usr/bin/env node\nprocess.exit(0);\n");
     await writeFile(npmExecPath, "// test npm entrypoint\n");
     const result = await runMemoraxCode(["codex-plugin", "install", "--json"], {
       HOME: home,
@@ -259,7 +260,7 @@ test("bootstrap install and activation reuse complete artifacts and repair drift
     syncBuiltinESMExports();
     await rm(root, { recursive: true, force: true });
   });
-  const options = { homeDir: root, codexHome: join(root, "codex"), codexCommand: join(root, "missing-codex"), workspace: root };
+  const options = { homeDir: root, codexHome: join(root, "codex"), codexCommand: join(root, process.platform === "win32" ? "missing-codex.exe" : "missing-codex"), workspace: root };
   const first = await installCodexPlugin(options);
   const source = first.pluginSourcePath;
   const marketplaceRoot = join(options.codexHome, ".memorax-code", "marketplaces", "memorax-code");
@@ -442,7 +443,7 @@ test("memorax-code uninstall leaves Codex config unchanged and removes the plugi
       "--codex-home",
       codexHome,
       "--codex-command",
-      join(root, "missing-codex"),
+      join(root, process.platform === "win32" ? "missing-codex.exe" : "missing-codex"),
       "--port",
       String(port),
       "--clients",
@@ -489,7 +490,7 @@ async function assertMemoraxCodeNpmPackageRemoval(packageName) {
     await mkdir(fakeBin, { recursive: true });
     await writeFile(join(packageRoot, "package.json"), JSON.stringify({ name: packageName, version: "0.1.2" }));
     await writeFile(join(packageRoot, "bin", "memorax-code.mjs"), "#!/usr/bin/env node\n");
-    await writeFile(fakeNpm, `#!/bin/sh\nprintf '["%s","%s","%s"]\\n' "$1" "$2" "$3" >> ${JSON.stringify(npmLog)}\n`);
+    await writeFile(fakeNpm, `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(npmLog)}, JSON.stringify(process.argv.slice(2)) + "\\n");\n`);
     await chmod(fakeNpm, 0o755);
 
     const uninstall = await runMemoraxCode([
@@ -501,9 +502,9 @@ async function assertMemoraxCodeNpmPackageRemoval(packageName) {
       "--json",
     ], {
       HOME: home,
-      PATH: `${fakeBin}:${process.env.PATH}`,
+      PATH: `${fakeBin}${delimiter}${process.env.PATH}`,
       MEMORAX_CODE_NPM_PACKAGE_ROOT: packageRoot,
-      MEMORAX_CODE_NPM_COMMAND: "/bin/sh",
+      MEMORAX_CODE_NPM_COMMAND: process.execPath,
       MEMORAX_CODE_NPM_EXEC_PATH: fakeNpm,
       npm_execpath: "",
     });
@@ -582,7 +583,7 @@ test("memorax-code uninstall does not remove the npm package when Backend stop f
     await mkdir(fakeBin, { recursive: true });
     await writeFile(join(packageRoot, "package.json"), JSON.stringify({ name: "@memorax/memorax-code", version: "0.1.2" }));
     await writeFile(join(packageRoot, "bin", "memorax-code.mjs"), "#!/usr/bin/env node\n");
-    await writeFile(fakeNpm, `#!/bin/sh\nprintf 'npm uninstall should not run\\n' >> ${JSON.stringify(npmLog)}\n`);
+    await writeFile(fakeNpm, `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(npmLog)}, JSON.stringify(process.argv.slice(2)) + "\\n");\n`);
     await chmod(fakeNpm, 0o755);
 
     fakeBackend = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"], {
@@ -607,9 +608,9 @@ test("memorax-code uninstall does not remove the npm package when Backend stop f
       "--json",
     ], {
       HOME: home,
-      PATH: `${fakeBin}:${process.env.PATH}`,
+      PATH: `${fakeBin}${delimiter}${process.env.PATH}`,
       MEMORAX_CODE_NPM_PACKAGE_ROOT: packageRoot,
-      MEMORAX_CODE_NPM_COMMAND: "/bin/sh",
+      MEMORAX_CODE_NPM_COMMAND: process.execPath,
       MEMORAX_CODE_NPM_EXEC_PATH: fakeNpm,
       npm_execpath: "",
     });
@@ -670,7 +671,7 @@ test("memorax-code uninstall preserves Codex artifacts after native removal fail
   const home = join(root, "home");
   const codexHome = join(home, "codex-home");
   const memoraxCodeHome = join(home, "memorax-code-home");
-  const fakeCodex = join(root, "fake-codex.mjs");
+  const fakeCodex = nativeCliCommand(root, "codex");
   const fakeNpm = join(root, "fake-npm.mjs");
   const npmLog = join(root, "npm.log");
   const packageRoot = join(root, "node_modules", "@memorax", "memorax-code");
@@ -684,7 +685,7 @@ test("memorax-code uninstall preserves Codex artifacts after native removal fail
     await writeFile(fakeNpm, `import { appendFileSync } from "node:fs";
 appendFileSync(${JSON.stringify(npmLog)}, JSON.stringify(process.argv.slice(2)) + "\\n");
 `);
-    await writeFile(fakeCodex, `#!/usr/bin/env node
+    await writeNativeCliFixture(fakeCodex, "codex", `#!/usr/bin/env node
 const args = process.argv.slice(2);
 const expected = process.env.TEST_CODEX_REMOVE_FAILURE === "plugin"
   ? ["plugin", "remove"] : ["plugin", "marketplace", "remove"];
@@ -758,11 +759,11 @@ test("memorax-code uninstall asks Codex CLI to remove the activated plugin when 
   const root = await mkdtemp(join(tmpdir(), "memorax-code-uninstall-plugin-remove-"));
   const home = join(root, "home");
   const codexHome = join(home, "codex-home");
-  const fakeCodex = join(root, "fake-codex.mjs");
+  const fakeCodex = nativeCliCommand(root, "codex");
   const codexLog = join(root, "codex.log");
   try {
     await mkdir(home, { recursive: true });
-    await writeFile(fakeCodex, `#!/usr/bin/env node
+    await writeNativeCliFixture(fakeCodex, "codex", `#!/usr/bin/env node
 import { appendFileSync } from "node:fs";
 appendFileSync(${JSON.stringify(codexLog)}, JSON.stringify(process.argv.slice(2)) + "\\n");
 `);
@@ -801,11 +802,11 @@ test("codex-plugin removal stops after the Codex CLI is unavailable", async () =
   const root = await mkdtemp(join(tmpdir(), "memorax-code-uninstall-plugin-unavailable-"));
   const home = join(root, "home");
   const codexHome = join(home, "codex-home");
-  const fakeCodex = join(root, "fake-codex.mjs");
+  const fakeCodex = nativeCliCommand(root, "codex");
   const codexLog = join(root, "codex.log");
   try {
     await mkdir(home, { recursive: true });
-    await writeFile(fakeCodex, `#!/usr/bin/env node
+    await writeNativeCliFixture(fakeCodex, "codex", `#!/usr/bin/env node
 import { appendFileSync } from "node:fs";
 appendFileSync(${JSON.stringify(codexLog)}, JSON.stringify(process.argv.slice(2)) + "\\n");
 console.error("command not found");
@@ -837,7 +838,7 @@ test("codex-plugin activate installs through Codex CLI and trusts MemoraX Code h
   const home = join(root, "home");
   const codexHome = join(home, "codex-home");
   const workspace = join(root, "workspace");
-  const fakeCodex = join(root, "fake-codex.mjs");
+  const fakeCodex = nativeCliCommand(root, "codex");
   const marketplaceRegistrationPath = join(root, "codex-marketplace-registration");
   const registrationPath = join(root, "codex-plugin-registration");
   const bundledVersion = JSON.parse(await readFile(bundledCodexManifestPath, "utf8")).version;
@@ -845,7 +846,7 @@ test("codex-plugin activate installs through Codex CLI and trusts MemoraX Code h
     await mkdir(workspace, { recursive: true });
     await mkdir(codexHome, { recursive: true });
     await writeFile(join(codexHome, "config.toml"), "[hooks.state]\n");
-    await writeFile(fakeCodex, `#!/usr/bin/env node
+    await writeNativeCliFixture(fakeCodex, "codex", `#!/usr/bin/env node
 import { createInterface } from "node:readline";
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 

@@ -30,7 +30,7 @@ const {
 } = await import(pathToFileURL(join(libRoot, "run-entrypoint.mjs")).href);
 
 test("package entrypoint preserves a verified Windows npm CLI path", async () => {
-  const packageRoot = await mkdtemp(`${tmpdir()}/memorax-code-npm-runtime-`);
+  const packageRoot = await mkdtemp(join(tmpdir(), "memorax-code-npm-runtime-"));
   const npmExecPath = "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js";
   const env = {};
   try {
@@ -92,8 +92,8 @@ test("package entrypoint exposes bundled Claude marketplace and skills roots", a
     delete process.env.MEMORAX_CODE_CLAUDE_MARKETPLACE_ROOT;
     delete process.env.MEMORAX_CODE_CLAUDE_SKILLS_ROOT;
     ensureClaudeMarketplaceEnv();
-    assert.match(process.env.MEMORAX_CODE_CLAUDE_MARKETPLACE_ROOT ?? "", /lib\/memorax-code-claude-marketplace$/);
-    assert.match(process.env.MEMORAX_CODE_CLAUDE_SKILLS_ROOT ?? "", /lib\/memorax-code-claude-adapter\/skills$/);
+    assert.match(process.env.MEMORAX_CODE_CLAUDE_MARKETPLACE_ROOT ?? "", /lib[/\\]memorax-code-claude-marketplace$/);
+    assert.match(process.env.MEMORAX_CODE_CLAUDE_SKILLS_ROOT ?? "", /lib[/\\]memorax-code-claude-adapter[/\\]skills$/);
 
     process.env.MEMORAX_CODE_CLAUDE_MARKETPLACE_ROOT = "/custom/marketplace";
     process.env.MEMORAX_CODE_CLAUDE_SKILLS_ROOT = "/custom/skills";

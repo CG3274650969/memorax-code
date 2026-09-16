@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+  atomicWriteJson,
   withJsonFileLock,
   withJsonFileLockAsync,
 } from "../src/config-utils.mjs";
@@ -701,3 +702,48 @@ function lockAbortError(error, path) {
     && error.path === path
     && error.lockPath === `${path}.lock`;
 }
+
+test("atomic JSON publication retries Windows contention without rewriting the temporary file", async (t) => {
+  for (const [platform, failures, expectedAttempts] of [
+    ["win32", 2, 3],
+    ["win32", Infinity, 5],
+    ["linux", 2, 1],
+  ]) {
+    await t.test(platform + ":" + failures, async (t) => {
+      const root = await mkdtemp(join(tmpdir(), "memorax-code-json-publish-"));
+      const path = join(root, "job.json");
+      const original = '{"status":"running"}\n';
+      await writeFile(path, original);
+      const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      const rename = fs.renameSync;
+      let attempts = 0;
+      const blocked = Object.assign(new Error("fixture file is busy"), { code: "EPERM" });
+      Object.defineProperty(process, "platform", { ...descriptor, value: platform });
+      const writes = t.mock.method(fs, "writeFileSync");
+      t.mock.method(Atomics, "wait", () => "timed-out");
+      t.mock.method(fs, "renameSync", (source, destination) => {
+        assert.equal(fs.readFileSync(path, "utf8"), original);
+        if (++attempts <= failures) throw blocked;
+        return rename(source, destination);
+      });
+      syncBuiltinESMExports();
+      try {
+        if (platform === "win32" && failures !== Infinity) {
+          atomicWriteJson(path, { status: "succeeded" });
+          assert.equal(JSON.parse(await readFile(path, "utf8")).status, "succeeded");
+        } else {
+          assert.throws(() => atomicWriteJson(path, { status: "succeeded" }), (error) => error === blocked);
+          assert.equal(await readFile(path, "utf8"), original);
+        }
+        assert.equal(attempts, expectedAttempts);
+        assert.equal(writes.mock.callCount(), 1);
+        assert.deepEqual(fs.readdirSync(root), ["job.json"]);
+      } finally {
+        Object.defineProperty(process, "platform", descriptor);
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+});

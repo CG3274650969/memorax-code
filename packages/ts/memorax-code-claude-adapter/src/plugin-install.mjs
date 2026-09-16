@@ -45,6 +45,7 @@ const STABLE_SHELL_REQUIRED_FILES = Object.freeze([
   "memorax-code-adapter-common/src/repo-memory/repo-procedure-memory-context.mjs",
   "memorax-code-adapter-common/src/repo-memory/repo-user-profile-context.mjs",
   "memorax-code-adapter-common/src/runtime-record.mjs",
+  "memorax-code-adapter-common/src/windows-directory-retry.mjs",
 ]);
 
 export function ensureClaudePluginInstalled(options = {}) {

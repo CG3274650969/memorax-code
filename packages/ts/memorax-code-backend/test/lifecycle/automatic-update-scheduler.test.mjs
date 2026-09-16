@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { startBackendAutomaticUpdateScheduler } from "../../dist/lifecycle/automatic-update-scheduler.js";
 
@@ -118,8 +118,8 @@ test("explicit automatic-update opt-out prevents the Backend scheduler", () => {
 });
 
 function fixture({ env = {}, packageVersion = "0.1.9", state = updateState(), pending = false } = {}) {
-  const packageRoot = "/installed/memorax-code";
-  const memoraxCodeHome = "/state/memorax-code";
+  const packageRoot = resolve("/installed/memorax-code");
+  const memoraxCodeHome = resolve("/state/memorax-code");
   const timers = fakeTimers();
   const controls = { now: STARTED_AT, state, pending };
   const children = [];

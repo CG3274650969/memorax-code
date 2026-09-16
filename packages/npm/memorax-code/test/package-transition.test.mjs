@@ -593,7 +593,7 @@ async function createFixture({
     }
     await writeFile(target, source);
   }
-  for (const relativePath of ["config-utils.mjs", "diagnostic-record.mjs", "deployment-failure.mjs", "runtime-record.mjs", "package-recovery.mjs"]) {
+  for (const relativePath of ["config-utils.mjs", "diagnostic-record.mjs", "deployment-failure.mjs", "runtime-record.mjs", "windows-directory-retry.mjs", "package-recovery.mjs"]) {
     const target = join(root, "lib", "memorax-code-adapter-common", "src", relativePath);
     await mkdir(dirname(target), { recursive: true });
     await cp(join(adapterCommonRoot, relativePath), target);

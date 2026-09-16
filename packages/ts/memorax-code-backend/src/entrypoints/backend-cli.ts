@@ -171,23 +171,24 @@ export function runBackendCli(argv = process.argv): void {
     startMemoraxCodeService(serviceOptions, argv, () => {
       activatePendingClientHookRuntime(pendingClientHookRuntime);
     }).then((result) => {
+      // Let pending output and child-process handles drain before exiting.
       const report = diagnoseLifecycleReport(result, serviceOptions);
       if (argv.includes("--json")) console.log(JSON.stringify(report, null, 2));
       else printLifecycleResult(report);
-      process.exit(result.ok ? 0 : 1);
+      process.exitCode = result.ok ? 0 : 1;
     }).catch((error) => {
       console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
+      process.exitCode = 1;
     });
   } else if (command === "stop") {
     stopMemoraxCodeService(serviceOptions, argv).then((result) => {
       const report = diagnoseLifecycleReport(result, serviceOptions);
       if (argv.includes("--json")) console.log(JSON.stringify(report, null, 2));
       else printLifecycleResult(report);
-      process.exit(result.ok ? 0 : 1);
+      process.exitCode = result.ok ? 0 : 1;
     }).catch((error) => {
       console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
+      process.exitCode = 1;
     });
   } else if (command === "restart") {
     restartMemoraxCodeService(serviceOptions, argv, () => {
@@ -196,19 +197,19 @@ export function runBackendCli(argv = process.argv): void {
       const report = diagnoseLifecycleReport(result, serviceOptions);
       if (argv.includes("--json")) console.log(JSON.stringify(report, null, 2));
       else printLifecycleResult(report);
-      process.exit(result.ok ? 0 : 1);
+      process.exitCode = result.ok ? 0 : 1;
     }).catch((error) => {
       console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
+      process.exitCode = 1;
     });
   } else if (command === "uninstall") {
     uninstallMemoraxCodeService(serviceOptions, argv).then((result) => {
       if (argv.includes("--json")) console.log(JSON.stringify(result, null, 2));
       else printLifecycleResult(result);
-      process.exit(result.ok ? 0 : 1);
+      process.exitCode = result.ok ? 0 : 1;
     }).catch((error) => {
       console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
+      process.exitCode = 1;
     });
   } else if (command === "logs") {
     const result = backendServiceLogs(serviceOptions);

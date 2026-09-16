@@ -1,3 +1,4 @@
+import { providerFixtureEnv } from "./support/provider-cli-fixture.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -171,7 +172,7 @@ function runCollectAll(repo, bin, extraArgs = []) {
     {
       cwd: packageRoot,
       encoding: "utf8",
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      env: { ...providerFixtureEnv(bin) },
     },
   );
 }
@@ -285,8 +286,7 @@ test("collect-all keeps provider facets raw without persistent index outputs", (
         cwd: packageRoot,
         encoding: "utf8",
         env: {
-          ...process.env,
-          PATH: `${bin}:${process.env.PATH ?? ""}`,
+          ...providerFixtureEnv(bin),
           LATEST_SHA: latestSha,
         },
       },
@@ -343,8 +343,7 @@ test("GitHub provider skips PRs with nonlocal merge commits without losing issue
         cwd: packageRoot,
         encoding: "utf8",
         env: {
-          ...process.env,
-          PATH: `${bin}:${process.env.PATH ?? ""}`,
+          ...providerFixtureEnv(bin),
           LATEST_SHA: latestSha,
         },
       },
@@ -460,7 +459,7 @@ test("repo-memory CLI accepts inline long-option values", () => {
       {
         cwd: packageRoot,
         encoding: "utf8",
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        env: { ...providerFixtureEnv(bin) },
       },
     );
 
@@ -532,7 +531,7 @@ test("collect-all reports visible defaults from defaults.json", () => {
       {
         cwd: packageRoot,
         encoding: "utf8",
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        env: { ...providerFixtureEnv(bin) },
       },
     );
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -628,7 +627,7 @@ test("collect-all supports separate commit, PR, and issue limit overrides", () =
       {
         cwd: packageRoot,
         encoding: "utf8",
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        env: { ...providerFixtureEnv(bin) },
       },
     );
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -654,7 +653,7 @@ test("provider facet scripts accept separate PR and issue limit overrides", () =
   const root = mkdtempSync(join(tmpdir(), "memorax-code-repo-memory-provider-limits."));
   try {
     const { repo, bin } = createRepoFixture(root);
-    const env = { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` };
+    const env = { ...providerFixtureEnv(bin) };
 
     const github = spawnSync(
       process.execPath,
@@ -730,7 +729,7 @@ test("collect-all requires --reuse and preserves unknown files in an existing .r
     const force = spawnSync(process.execPath, [repoMemoryScript, "prepare", repo, "--force"], {
       cwd: packageRoot,
       encoding: "utf8",
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      env: { ...providerFixtureEnv(bin) },
     });
     assert.notEqual(force.status, 0);
     assert.match(force.stderr, /unrecognized arguments: --force/);
@@ -758,7 +757,7 @@ test("repo-memory prepare allows a user-profile-only .repo_memory sidecar", () =
     ], {
       cwd: packageRoot,
       encoding: "utf8",
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      env: { ...providerFixtureEnv(bin) },
     });
     assert.equal(profile.status, 0, profile.stderr || profile.stdout);
     const profilePath = join(repo, ".repo_memory", "user-profile", "preferences.md");
@@ -767,7 +766,7 @@ test("repo-memory prepare allows a user-profile-only .repo_memory sidecar", () =
     const prepared = spawnSync(process.execPath, [repoMemoryScript, "prepare", repo], {
       cwd: packageRoot,
       encoding: "utf8",
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      env: { ...providerFixtureEnv(bin) },
     });
     assert.equal(prepared.status, 0, prepared.stderr || prepared.stdout);
     assert.deepEqual(readFileSync(profilePath), originalProfile);

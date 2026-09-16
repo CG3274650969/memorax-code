@@ -52,7 +52,10 @@ function tempRoot(t, prefix) {
       if (!entry.isDirectory() || entry.name === "in-progress") continue;
       const jobPath = join(jobsDir, entry.name, "job.json");
       const state = JSON.parse(readFileSync(jobPath, "utf8"));
-      if (state.status !== "succeeded" && state.status !== "failed") killAndWait(state.pid, jobPath);
+      if (state.status !== "succeeded" && state.status !== "failed") {
+        killAndWait(state.pid, jobPath);
+        if (process.platform === "win32") continue;
+      }
       waitForMarkerAbsent(memoraxCodeHome, state.repo);
     }
     rmSync(root, { recursive: true, force: true });
@@ -271,8 +274,6 @@ test("repo memory start and maintain reuse an active job before inspecting the b
   assert.equal(payload.job.alreadyRunning, true);
   assert.equal(payload.job.jobId, startedPayload.jobId);
   assert.equal(countJobDirs(memoraxCodeHome), 1);
-
-  killAndWait(startedPayload.pid, startedPayload.jobPath);
 });
 
 test("repo memory maintain degrades to a non-blocking no-op when policy evaluation fails", (t) => {
@@ -323,7 +324,7 @@ for (const expectedMode of ["build", "update"]) {
     assert.equal(payload.job.alreadyRunning, false);
 
     const state = waitForTerminal(payload.job.jobPath);
-    assert.equal(state.status, "succeeded");
+    assert.equal(state.status, "succeeded", JSON.stringify(state));
     assert.equal(state.exitCode, 0);
     assert.equal(state.mode, expectedMode);
     assert.equal(state.snapshotHead, head);
@@ -369,7 +370,6 @@ test("repo memory job launcher writes job state in MEMORAX_CODE_HOME", (t) => {
   assert.match(state.outputLogPath, /output\.log$/);
   assert.deepEqual(state.command, [process.execPath, fixtureRunner, repo, state.finalMessagePath]);
   assert.equal(state.workerCommand[1], workerPath);
-  killAndWait(payload.pid, payload.jobPath);
 });
 
 test("repo memory maintenance preserves a relative home when workers change cwd", (t) => {
@@ -412,8 +412,6 @@ test("repo memory job launcher allows only one concurrent startup per repo", asy
   assert.equal(alreadyRunning.length, 19);
   assert.equal(countJobDirs(memoraxCodeHome), 1);
   assert.equal(new Set(payloads.map((payload) => payload.jobId)).size, 1);
-
-  killAndWait(started[0].pid, started[0].jobPath);
 });
 
 test("repo memory job launcher overwrites marker with non-running pid", (t) => {
@@ -437,8 +435,6 @@ test("repo memory job launcher overwrites marker with non-running pid", (t) => {
   assert.equal(marker.version, 1);
   assert.equal(marker.pid, payload.pid);
   assert.equal(marker.mode, "update");
-
-  killAndWait(payload.pid, payload.jobPath);
 });
 
 test("repo memory job launcher overwrites marker after TTL expires", (t) => {
@@ -460,8 +456,6 @@ test("repo memory job launcher overwrites marker after TTL expires", (t) => {
   const marker = JSON.parse(readFileSync(markerPathForRepo(memoraxCodeHome, realpathSync(repo)).markerPath, "utf8"));
   assert.equal(marker.pid, payload.pid);
   assert.equal(marker.mode, "build");
-
-  killAndWait(payload.pid, payload.jobPath);
 });
 
 test("repo memory job launcher does not start when startup state directory is invalid", (t) => {
@@ -515,8 +509,6 @@ test("repo memory job launcher removes old empty startup lockdir and starts job"
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.alreadyRunning, false);
   assert.equal(existsSync(lockInfo.lockDir), false);
-
-  killAndWait(payload.pid, payload.jobPath);
 });
 
 test("repo memory job launcher removes stale startup lock and starts job", (t) => {
@@ -542,8 +534,6 @@ test("repo memory job launcher removes stale startup lock and starts job", (t) =
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.alreadyRunning, false);
   assert.equal(existsSync(lockDir), false);
-
-  killAndWait(payload.pid, payload.jobPath);
 });
 
 test("repo memory job supervisor fails when generated artifacts do not validate", (t) => {
@@ -670,6 +660,13 @@ function killMaybe(pid) {
 }
 
 function killAndWait(pid, jobPath) {
+  if (process.platform === "win32") {
+    // Forced termination cannot run the worker's SIGTERM finalizer on Windows.
+    // Scheduling assertions are complete; terminate only this fixture's process tree.
+    const result = spawnSync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { encoding: "utf8", windowsHide: true });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    return;
+  }
   killMaybe(pid);
   const state = waitForTerminal(jobPath);
   assert.equal(state.status, "failed");

@@ -1207,7 +1207,9 @@ Placement rules:
 - Cross-capability server composition belongs in `test/app`; wire-level Hook
   protocol behavior belongs in `test/transport/http`.
 - Area-specific fixtures belong in `test/<area>/support`; only helpers truly
-  shared across responsibilities belong in `test/support`.
+  shared across responsibilities belong in `test/support`. Cross-package native
+  CLI fixtures belong in repository-root `test/support`; provider response
+  fixtures used only by the shared Skill suite belong in `test/shared-skill/support`.
 - `test/architecture` has no source counterpart. It owns source topology,
   root-surface, delegation, and dependency-cycle contracts. HTTP route behavior
   belongs in `test/transport/http` and `test/app`.

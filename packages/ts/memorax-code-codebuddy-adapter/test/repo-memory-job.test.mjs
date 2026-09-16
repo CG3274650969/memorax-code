@@ -89,7 +89,8 @@ test("CodeBuddy repo memory worker bounds a non-returning headless client", asyn
   assert.equal(state.failureReason, "codebuddy_timeout");
   assert.equal(state.timeoutMs, 120);
   assert.ok(state.elapsedMs >= 100, `expected timeout elapsed time, got ${state.elapsedMs}`);
-  assert.equal(state.signal, "SIGTERM");
+  assert.ok(state.elapsedMs < 5_000, "the hanging client must be terminated within a fixed bound");
+  if (process.platform !== "win32") assert.equal(state.signal, "SIGTERM");
 });
 
 function runInstalledJob(home, args, extraEnv = {}) {

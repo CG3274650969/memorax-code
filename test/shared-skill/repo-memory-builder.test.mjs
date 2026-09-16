@@ -1,3 +1,4 @@
+import { providerFixtureEnv } from "./support/provider-cli-fixture.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -60,7 +61,7 @@ test("repo-memory prepare preserves procedure and user-profile sidecars without 
     const result = spawnSync(process.execPath, [repoMemoryScript, "prepare", repo], {
       cwd: packageRoot,
       encoding: "utf8",
-      env: { ...process.env, PATH: "/usr/bin:/bin" },
+      env: { ...process.env },
     });
 
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -118,8 +119,7 @@ exit 2
       cwd: packageRoot,
       encoding: "utf8",
       env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        ...providerFixtureEnv(bin),
       },
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -154,8 +154,7 @@ exit 2
       cwd: packageRoot,
       encoding: "utf8",
       env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        ...providerFixtureEnv(bin),
       },
     });
     assert.equal(second.status, 0, second.stderr || second.stdout);
@@ -211,8 +210,7 @@ exit 2
       cwd: packageRoot,
       encoding: "utf8",
       env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        ...providerFixtureEnv(bin),
       },
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -279,8 +277,7 @@ exit 2
       cwd: packageRoot,
       encoding: "utf8",
       env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        ...providerFixtureEnv(bin),
       },
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -340,8 +337,7 @@ exit 2
       cwd: packageRoot,
       encoding: "utf8",
       env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        ...providerFixtureEnv(bin),
       },
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -405,8 +401,7 @@ exit 2
       cwd: packageRoot,
       encoding: "utf8",
       env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        ...providerFixtureEnv(bin),
       },
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -476,8 +471,7 @@ exit 2
       cwd: packageRoot,
       encoding: "utf8",
       env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        ...providerFixtureEnv(bin),
       },
     });
     assert.equal(prepare.status, 0, prepare.stderr || prepare.stdout);
@@ -503,8 +497,7 @@ exit 2
         cwd: packageRoot,
         encoding: "utf8",
         env: {
-          ...process.env,
-          PATH: `${bin}:${process.env.PATH ?? ""}`,
+          ...providerFixtureEnv(bin),
         },
       },
     );
@@ -583,8 +576,7 @@ exit 2
         cwd: packageRoot,
         encoding: "utf8",
         env: {
-          ...process.env,
-          PATH: `${bin}:${process.env.PATH ?? ""}`,
+          ...providerFixtureEnv(bin),
           GH_RETRY_COUNTER: counter,
         },
       },
@@ -657,8 +649,7 @@ exit 2
         cwd: packageRoot,
         encoding: "utf8",
         env: {
-          ...process.env,
-          PATH: `${bin}:${process.env.PATH ?? ""}`,
+          ...providerFixtureEnv(bin),
         },
       },
     );
@@ -758,8 +749,7 @@ exit 2
         cwd: packageRoot,
         encoding: "utf8",
         env: {
-          ...process.env,
-          PATH: `${bin}:${process.env.PATH ?? ""}`,
+          ...providerFixtureEnv(bin),
           LANDED_SHA: landedSha,
           FUTURE_SHA: futureSha,
         },
@@ -835,8 +825,7 @@ exit 2
         cwd: packageRoot,
         encoding: "utf8",
         env: {
-          ...process.env,
-          PATH: `${bin}:${process.env.PATH ?? ""}`,
+          ...providerFixtureEnv(bin),
         },
       },
     );
@@ -909,8 +898,7 @@ exit 2
         cwd: packageRoot,
         encoding: "utf8",
         env: {
-          ...process.env,
-          PATH: `${bin}:${process.env.PATH ?? ""}`,
+          ...providerFixtureEnv(bin),
         },
       },
     );
@@ -1001,8 +989,7 @@ exit 2
         cwd: packageRoot,
         encoding: "utf8",
         env: {
-          ...process.env,
-          PATH: `${bin}:${process.env.PATH ?? ""}`,
+          ...providerFixtureEnv(bin),
           LANDED_SHA: landedSha,
           FUTURE_SHA: futureSha,
         },
@@ -1102,8 +1089,7 @@ exit 2
         cwd: packageRoot,
         encoding: "utf8",
         env: {
-          ...process.env,
-          PATH: `${bin}:${process.env.PATH ?? ""}`,
+          ...providerFixtureEnv(bin),
           LANDED_SHA: landedSha,
           FUTURE_SHA: futureSha,
         },

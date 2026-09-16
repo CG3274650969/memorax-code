@@ -19,6 +19,7 @@ import {
 import { basename, dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { ensurePrivateDirectory } from "./runtime-record.mjs";
+import { withWindowsDirectoryRetry } from "./windows-directory-retry.mjs";
 
 const JSON_FILE_LOCK_TIMEOUT_MS = 1500;
 const JSON_FILE_LOCK_STALE_MS = 30000;
@@ -94,7 +95,7 @@ export function atomicWriteText(path, value) {
   const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
   try {
     writeFileSync(tmp, value);
-    renameSync(tmp, path);
+    withWindowsDirectoryRetry(() => renameSync(tmp, path));
   } catch (error) {
     rmSync(tmp, { force: true });
     throw error;

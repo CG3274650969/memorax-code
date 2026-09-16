@@ -115,6 +115,7 @@ const PROFILE_BUNDLE_FILES = Object.freeze([
   "memorax-code-adapter-common/src/repo-memory/repo-memory-update-policy.mjs",
   "memorax-code-adapter-common/src/repo-memory/repo-user-profile-context.mjs",
   "memorax-code-adapter-common/src/runtime-record.mjs",
+  "memorax-code-adapter-common/src/windows-directory-retry.mjs",
   "memorax-code-adapter-common/src/windows-cli-invocation.mjs",
 ]);
 

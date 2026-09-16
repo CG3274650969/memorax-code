@@ -38,8 +38,8 @@ test("atomic config seeding creates mode 0600 and preserves existing bytes, mode
     const newPath = join(root, "new", "config.toml");
     assert.equal(updateConfigFileAtomically(updateOptions(newPath)), "created");
     assert.equal(await readFile(newPath, "utf8"), configUpdateBlock);
-    assert.equal((await stat(newPath)).mode & 0o777, 0o600);
     if (process.platform !== "win32") {
+      assert.equal((await stat(newPath)).mode & 0o777, 0o600);
       assert.equal((await stat(join(root, "new"))).mode & 0o777, 0o700);
     }
 
@@ -101,12 +101,12 @@ test("atomic config seeding leaves existing bytes unchanged for parse and filesy
         },
       };
     }],
-    ["backup link", "backup", () => ({ linkSync: () => { throw new Error("secret link failure"); } })],
+    ["backup creation", "backup", () => ({ [process.platform === "win32" ? "copyFileSync" : "linkSync"]: () => { throw new Error("secret link failure"); } })],
     ["rename", "publish", () => ({ renameSync: () => { throw new Error("secret rename failure"); } })],
   ];
 
   for (const [name, stage, operationsFactory] of cases) {
-    await t.test(name, async () => {
+    await t.test(name, { skip: process.platform === "win32" && ["directory chmod", "chown", "chmod"].includes(name) ? "POSIX metadata operation" : false }, async () => {
       const root = await mkdtemp(join(tmpdir(), "memorax-code-config-seed-failure-"));
       const path = join(root, "config.toml");
       const original = '[memorax]\napi_key = "preserved-secret"\n';

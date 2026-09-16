@@ -1,3 +1,4 @@
+import { nativeCliCommand, writeNativeCliFixture } from "../../../../test/support/native-cli-fixture.mjs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
@@ -36,6 +37,11 @@ const trialApiKey = `sk_${"T".repeat(43)}`;
 async function writeMockNodeCommand(command, source, { npmCodeBuddy = false } = {}) {
   const contents = Array.isArray(source) ? source.join("\n") : source;
   if (process.platform === "win32") {
+    const client = basename(command);
+    if (client === "codex" || client === "claude") {
+      await writeNativeCliFixture(nativeCliCommand(dirname(command), client), client, contents);
+      return;
+    }
     if (npmCodeBuddy) {
       const packageRoot = join(dirname(command), "node_modules", "@tencent-ai", "codebuddy-code");
       const entry = join(packageRoot, "bin", "codebuddy");
@@ -1156,7 +1162,7 @@ test("setup seeds the default MemoraX Code config around trial memory preference
       config,
       /top_k|k_dense|k_sparse|min_score|max_context_chars|max_item_chars|buffer_|chunk_|max_message_chars|timeout_ms|retention_days|max_event_chars|max_file_bytes/,
     );
-    assert.equal((await stat(join(run.memoraxCodeHome, "config.toml"))).mode & 0o777, 0o600);
+    if (process.platform !== "win32") assert.equal((await stat(join(run.memoraxCodeHome, "config.toml"))).mode & 0o777, 0o600);
     if (process.platform !== "win32") {
       assert.equal((await stat(run.memoraxCodeHome)).mode & 0o777, 0o700);
     }
@@ -1277,7 +1283,7 @@ test("setup configures an existing MemoraX account without trial provisioning", 
     assert.ok(config.includes(`api_key = "${apiKey}" # MemoraX API key used by the local Backend.`));
     assert.doesNotMatch(config, /old-secret|old-user/);
     assert.doesNotMatch(config, /credential_source/);
-    assert.equal((await stat(join(run.memoraxCodeHome, "config.toml"))).mode & 0o777, 0o600);
+    if (process.platform !== "win32") assert.equal((await stat(join(run.memoraxCodeHome, "config.toml"))).mode & 0o777, 0o600);
     await assertSetupComplete(run);
   } finally {
     await rm(run.root, { recursive: true, force: true });
@@ -1382,7 +1388,8 @@ test("setup rejects a non-interactive fresh run without side effects", async () 
     assert.equal(run.result.code, 1, run.result.stderr);
     assert.match(run.result.stderr, /Setup requires an interactive terminal/);
     assert.doesNotMatch(run.result.stderr, /Connect MemoraX Code to MemoraX now/);
-    assert.equal(run.log, "");
+    // Windows discovery may probe --version before the terminal guard.
+    assert.equal(run.log.replace(/^codex --version\r?\n/gm, ""), "");
     await assert.rejects(
       readFile(join(run.memoraxCodeHome, "config.toml"), "utf8"),
       (error) => error?.code === "ENOENT",
