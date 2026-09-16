@@ -292,10 +292,11 @@ test("unavailable and oversized npm diagnostic relays preserve the command failu
   await assert.rejects(readdir(dirname(relayPath)), { code: "ENOENT" });
 });
 
-test("pending recovery prevents registry and installation work and schedules a retry", async (t) => {
+test("pending recovery bypasses the successful-check throttle and schedules a retry", async (t) => {
   const { api, memoraxCodeHome } = await fixture(t);
   const calls = [];
-  const result = await api.runAutomaticUpdateCore(options(memoraxCodeHome, "08:00:00", {
+  await api.runAutomaticUpdateCore(options(memoraxCodeHome, "08:00:00"));
+  const result = await api.runAutomaticUpdateCore(options(memoraxCodeHome, "09:00:00", {
     checkPending: () => { throw Object.assign(new Error("pending transition"), { code: "PACKAGE_TRANSITION_PENDING" }); },
     resolveTargetVersion: async () => record(calls, "check", "0.1.10"),
     installVersion: async () => record(calls, "install", true),
@@ -306,7 +307,7 @@ test("pending recovery prevents registry and installation work and schedules a r
   assert.deepEqual(calls, []);
   assert.equal(result.error.code, "PACKAGE_TRANSITION_PENDING");
   assert.equal(result.error.stage, "transition_read");
-  assert.equal((await readState(api, memoraxCodeHome)).nextCheckAt, "2026-08-30T08:15:00.000Z");
+  assert.equal((await readState(api, memoraxCodeHome)).nextCheckAt, "2026-08-30T09:15:00.000Z");
 });
 
 

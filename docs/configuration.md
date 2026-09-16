@@ -180,7 +180,13 @@ while it remains running. It reads the next deadline from the private update
 record, so an active Backend continues checking even when the user stays in one
 client session. Stable installations follow npm `latest`; prerelease
 installations follow `preview`. A successful result is reused for eight hours,
-while a failed check, install, or reconciliation retries after 15 minutes. Set
+while a failed check, install, or reconciliation retries after 15 minutes. Local
+scheduling checks run at intervals of at most 15 minutes to detect pending package
+transitions without waiting for the eight-hour window. These local checks do not
+themselves query npm; when no transition is pending, registry checks follow the
+persisted deadline. A Backend started during package restoration defers its
+initial check so a normal installation can consume its transition first. Pending
+transitions produce recovery guidance rather than an unowned automatic restart. Set
 `MEMORAX_CODE_AUTO_UPDATE=false` before starting or restarting the managed
 Backend to disable the scheduler. Client startup Hooks only recover an
 unavailable Backend and do not schedule updates.

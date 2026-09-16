@@ -369,7 +369,7 @@ async function assertDiagnosticDiscovery(stateHome, realRecord, blockedHome) {
   assert.equal(JSON.parse(lookup.stdout).records[0].id, realRecord.id);
   const feedback = await queryDiagnostics(stateHome, ["--id", copies[2].id], { json: false });
   assert.equal(feedback.code, 0);
-  assert.match(feedback.stdout, /MemoraX Code diagnostic history/);
+  assert.match(feedback.stdout, /MemoraX Code diagnostic history .*available recovery outcomes; not current service health/);
   for (const label of ["Diagnostic ID", "Time", "Operation", "Stage", "Error code", "Error", "Impact", "Next step"]) {
     assert.ok(feedback.stdout.includes(label), `Feedback text must include ${label}`);
   }

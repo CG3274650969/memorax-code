@@ -658,7 +658,7 @@ function parseDiagnosticQuery(argv: string[]): { limit?: number; id?: string } {
 }
 
 function printDiagnosticHistory(history: DiagnosticHistory): void {
-  console.log("MemoraX Code diagnostic history (recorded failures; recovery is not tracked).");
+  console.log("MemoraX Code diagnostic history (recorded failures and available recovery outcomes; not current service health).");
   if (history.errorCode) console.log(`${history.errorCode}${history.systemCode ? ` (${history.systemCode})` : ""}: ${diagnosticReadGuidance(history.errorCode)}`);
   if (history.skipped) console.log(`Skipped ${history.skipped} unreadable or invalid diagnostic record(s).`);
   if (history.ok && !history.records.length && !history.skipped) console.log("No retained failure records found. This does not confirm Hook execution or writeback success.");

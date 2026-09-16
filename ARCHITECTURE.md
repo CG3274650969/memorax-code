@@ -275,8 +275,8 @@ sequenceDiagram
   Setup->>Completion: commit only after final verification
 
   loop completed setup while managed Backend remains running
-    Service->>Update: dispatch when durable deadline is due
-    Update->>Update: lock, recheck cadence, resolve channel target
+    Service->>Update: dispatch when due or a pending transition needs diagnosis
+    Update->>Update: lock, validate pending state, recheck cadence, resolve channel target
     opt target version differs
       Update->>NPM: install exact published target
       Note over NPM,Lifecycle: Uses the package replacement path above
@@ -364,7 +364,10 @@ installation fails and removes it afterward. Relay creation, reading, writing, a
 effort and cannot replace the installation outcome.
 
 After completed setup, the managed Backend schedules a detached updater from
-the durable deadline; client startup Hooks only recover an unavailable Backend.
+the durable deadline, with bounded local wakeups to detect pending transitions
+independently of the registry check window. The updater validates those records;
+the scheduler only observes their presence and preserves restoration deferral and
+failure backoff. Client startup Hooks only recover an unavailable Backend.
 The updater serializes checks through its private record and lock, installs an
 exact target from the installed release channel, and reuses non-interactive
 setup reconciliation. It preserves explicit client choices and configuration.

@@ -114,6 +114,13 @@ export async function runAutomaticUpdateCore(options) {
           throw failure;
         }
       };
+      // A pending replacement needs diagnosis even within the registry check window.
+      try {
+        options.checkPending?.();
+      } catch (error) {
+        return finish({ ok: false, disposition: "failed", reason: "recovery_required",
+          error: updateFailure(error, "PACKAGE_TRANSITION_FAILED", "transition_read") }, installedVersion, true);
+      }
       const state = readAutomaticUpdateState(memoraxCodeHome);
       if (state.status === "valid"
         && state.record.installedVersion === installedVersion
@@ -122,12 +129,6 @@ export async function runAutomaticUpdateCore(options) {
         return { ok: true, disposition: "throttled", state: state.record };
       }
 
-      try {
-        options.checkPending?.();
-      } catch (error) {
-        return finish({ ok: false, disposition: "failed", reason: "recovery_required",
-          error: updateFailure(error, "PACKAGE_TRANSITION_FAILED", "transition_read") }, installedVersion, true);
-      }
       let targetVersion;
       try {
         targetVersion = requiredString(
