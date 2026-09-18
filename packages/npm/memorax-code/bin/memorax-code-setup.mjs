@@ -33,6 +33,10 @@ import {
   traeInstallationDetected,
 } from "../lib/memorax-code-trae-adapter/src/adapter-paths.mjs";
 import {
+  defaultCursorHome,
+  cursorInstallationDetected,
+} from "../lib/memorax-code-cursor-adapter/src/adapter-paths.mjs";
+import {
   failedLifecycleAdapters,
   reconcileSetup,
   startLifecycleReport,
@@ -57,7 +61,7 @@ const RED = "\x1b[31m";
 const BOLD = "\x1b[1m";
 const RESET = "\x1b[0m";
 const DSH_OPTIONAL_ENV = "MEMORAX_CODE_DSH_ADAPTER_OPTIONAL";
-const SETUP_CLIENTS = ["codex", "claude", "opencode", "codebuddy", "workbuddy", "trae"];
+const SETUP_CLIENTS = ["codex", "claude", "opencode", "codebuddy", "workbuddy", "trae", "cursor"];
 
 const skipCodexPluginInstall = truthyEnv(process.env.MEMORAX_CODE_SKIP_CODEX_PLUGIN_INSTALL);
 const skipClaudeAdapterInstall = truthyEnv(process.env.MEMORAX_CODE_SKIP_CLAUDE_ADAPTER_INSTALL);
@@ -65,6 +69,7 @@ const skipOpenCodeAdapterInstall = truthyEnv(process.env.MEMORAX_CODE_SKIP_OPENC
 const skipCodeBuddyAdapterInstall = truthyEnv(process.env.MEMORAX_CODE_SKIP_CODEBUDDY_ADAPTER_INSTALL);
 const skipWorkBuddyAdapterInstall = truthyEnv(process.env.MEMORAX_CODE_SKIP_WORKBUDDY_ADAPTER_INSTALL);
 const skipTraeAdapterInstall = truthyEnv(process.env.MEMORAX_CODE_SKIP_TRAE_ADAPTER_INSTALL);
+const skipCursorAdapterInstall = truthyEnv(process.env.MEMORAX_CODE_SKIP_CURSOR_ADAPTER_INSTALL);
 const updateMode = truthyEnv(process.env.MEMORAX_CODE_SETUP_UPDATE);
 const automaticUpdateMode = truthyEnv(process.env.MEMORAX_CODE_SETUP_AUTOMATIC_UPDATE);
 const setupMode = setupModeFromEnvironment(process.env.MEMORAX_CODE_SETUP_MODE);
@@ -183,6 +188,11 @@ const traePreflight = requestedClients.includes("trae") && !skipTraeAdapterInsta
       integrationSelected: !existingSetup || previousClients.includes("trae"),
     })
   : { ok: true };
+const cursorPreflight = requestedClients.includes("cursor") && !skipCursorAdapterInstall
+  ? runCursorPreflight({
+      integrationSelected: !existingSetup || previousClients.includes("cursor"),
+    })
+  : { ok: true };
 const failedBuddyClients = [
   ["codebuddy", codebuddyPreflight],
   ["workbuddy", workbuddyPreflight],
@@ -199,7 +209,8 @@ const detectedClients = requestedClients.filter((client) => {
   if (client === "opencode") return !skipOpenCodeAdapterInstall && opencodePreflight.ok;
   if (client === "codebuddy") return !skipCodeBuddyAdapterInstall && codebuddyPreflight.ok;
   if (client === "workbuddy") return !skipWorkBuddyAdapterInstall && workbuddyPreflight.ok;
-  return !skipTraeAdapterInstall && traePreflight.ok;
+  if (client === "trae") return !skipTraeAdapterInstall && traePreflight.ok;
+  return !skipCursorAdapterInstall && cursorPreflight.ok;
 });
 const newlyDetectedClients = existingSetup
   ? detectedClients.filter((client) => !explicitClientChoices.includes(client))
@@ -246,6 +257,9 @@ if (requestedClients.includes("workbuddy") && !skipWorkBuddyAdapterInstall && !w
 if (requestedClients.includes("trae") && !skipTraeAdapterInstall && !traePreflight.ok) {
   log("Trae runtime or data directory was not detected; skipping its adapter setup.");
 }
+if (requestedClients.includes("cursor") && !skipCursorAdapterInstall && !cursorPreflight.ok) {
+  log("Cursor runtime or data directory was not detected; skipping its adapter setup.");
+}
 if (writeClientSelectionConfig(selectedClients, clientsWithPersistedIntent) === "failed") {
   printPostinstallSummary("not-verified");
   process.exit(1);
@@ -286,6 +300,7 @@ const opencodeClientEnabled = installClients.includes("opencode");
 const codebuddyClientEnabled = installClients.includes("codebuddy");
 const workbuddyClientEnabled = installClients.includes("workbuddy");
 const traeClientEnabled = installClients.includes("trae");
+const cursorClientEnabled = installClients.includes("cursor");
 const codexClientNewlyEnabled = codexClientEnabled
   && existingSetup
   && !previousClients.includes("codex");
@@ -360,6 +375,11 @@ const traeSkipReason = setupClientSkipReason({
   selected: selectedClients.includes("trae"),
   enabled: traeClientEnabled,
 });
+const cursorSkipReason = setupClientSkipReason({
+  explicitlySkipped: skipCursorAdapterInstall,
+  selected: selectedClients.includes("cursor"),
+  enabled: cursorClientEnabled,
+});
 
 const backendAndAdapters = await startBackendAndCheck({
   skipCodexAdapter,
@@ -378,8 +398,11 @@ const backendAndAdapters = await startBackendAndCheck({
   workbuddyAdapterRequired: workbuddyClientEnabled,
   workbuddySkipReason,
   skipTraeAdapter: !traeClientEnabled,
+  skipCursorAdapter: !cursorClientEnabled,
   traeAdapterRequired: traeClientEnabled,
+  cursorAdapterRequired: cursorClientEnabled,
   traeSkipReason,
+  cursorSkipReason,
 });
 const backendAndAdaptersStatus = backendAndAdapters.status;
 if (backendAndAdaptersStatus === "enabled") {
@@ -394,6 +417,7 @@ if (backendAndAdaptersStatus === "enabled") {
     codebuddyAdapterEnabled: codebuddyClientEnabled,
     workbuddyAdapterEnabled: workbuddyClientEnabled,
     traeAdapterEnabled: traeClientEnabled,
+    cursorAdapterEnabled: cursorClientEnabled,
     traeGlobalHooksActivationRequired: backendAndAdapters.traeGlobalHooksActivationRequired,
   });
   printCommonCommands({
@@ -403,6 +427,7 @@ if (backendAndAdaptersStatus === "enabled") {
     codebuddyAdapterEnabled: codebuddyClientEnabled,
     workbuddyAdapterEnabled: workbuddyClientEnabled,
     traeAdapterEnabled: traeClientEnabled,
+    cursorAdapterEnabled: cursorClientEnabled,
   });
 }
 printPostinstallSummary(
@@ -943,7 +968,7 @@ function writeClientSelectionConfig(clients, configuredClients = SETUP_CLIENTS) 
 
 function setManagedClientSelection(text, clients, configuredClients = SETUP_CLIENTS) {
   let updated = text;
-  for (const client of ["opencode", "claude", "codebuddy", "workbuddy", "trae", "codex"]) {
+  for (const client of ["opencode", "claude", "codebuddy", "workbuddy", "trae", "cursor", "codex"]) {
     if (!configuredClients.includes(client)) continue;
     updated = setTomlField(updated, "clients", client, String(clients.includes(client)));
   }
@@ -1004,6 +1029,7 @@ function defaultMemoraxCodeConfig() {
     "codebuddy = true # Manage the CodeBuddy CLI adapter.",
     "workbuddy = true # Manage the WorkBuddy adapter.",
     "trae = true # Manage the Trae adapter.",
+    "cursor = true # Manage the Cursor adapter.",
     "",
     "# MemoraX remote-memory connection.",
     "[memorax]",
@@ -1060,6 +1086,10 @@ function defaultMemoraxCodeConfig() {
     "[trace.trae]",
     "enabled = true # Enable local Trae session memory trace collection.",
     "capture_content = true # Store content in local Trae trace events.",
+    "",
+    "[trace.cursor]",
+    "enabled = true # Enable local Cursor session memory trace collection.",
+    "capture_content = true # Store content in local Cursor trace events.",
     "",
   ].join("\n");
 }
@@ -1139,6 +1169,9 @@ function runCommonPreflight() {
   }
   if (skipTraeAdapterInstall) {
     log("Trae adapter setup is disabled for this setup; other client setup can still continue.");
+  }
+  if (skipCursorAdapterInstall) {
+    log("Cursor adapter setup is disabled for this setup; other client setup can still continue.");
   }
   return {};
 }
@@ -1249,6 +1282,18 @@ function runTraePreflight({ integrationSelected = true } = {}) {
   return { ok: true };
 }
 
+function runCursorPreflight({ integrationSelected = true } = {}) {
+  const home = defaultCursorHome();
+  const detected = cursorInstallationDetected();
+  log(`Cursor data directory: ${existsSync(home) ? `found (${home})` : "not detected"}`);
+  log(`Cursor application: ${detected ? "detected" : "not detected"}`);
+  if (!detected) return { ok: false };
+  log(integrationSelected
+    ? "Keeping Cursor provider settings unchanged and installing the shared memory Hooks and Skill."
+    : "Keeping Cursor provider settings unchanged while checking whether to enable its integration.");
+  return { ok: true };
+}
+
 function installedPluginCache() {
   for (const marketplaceName of [CLI_MARKETPLACE_NAME, PERSONAL_MARKETPLACE_NAME]) {
     const versions = installedPluginCacheVersions(marketplaceName);
@@ -1321,8 +1366,11 @@ async function startBackendAndCheck({
   workbuddyAdapterRequired = !skipWorkBuddyAdapter,
   workbuddySkipReason,
   skipTraeAdapter = false,
+  skipCursorAdapter = false,
   traeAdapterRequired = !skipTraeAdapter,
+  cursorAdapterRequired = !skipCursorAdapter,
   traeSkipReason,
+  cursorSkipReason,
 } = {}) {
   const adapterFlags = clientLifecycleFlags({ clientMode });
   const startArgs = ["start", ...adapterFlags, "--json"];
@@ -1354,6 +1402,7 @@ async function startBackendAndCheck({
       codebuddyAdapterRequired,
       workbuddyAdapterRequired,
       traeAdapterRequired,
+      cursorAdapterRequired,
     }),
     onEvent: (event) => {
       if (event.type === "start" && event.attempt === 1) {
@@ -1390,7 +1439,9 @@ async function startBackendAndCheck({
           codebuddySkipReason,
           workbuddySkipReason,
           skipTraeAdapter,
+          skipCursorAdapter,
           traeSkipReason,
+          cursorSkipReason,
         });
       }
     },
@@ -1433,7 +1484,9 @@ function printReconcileFailure(result, {
   codebuddySkipReason,
   workbuddySkipReason,
   skipTraeAdapter,
+  skipCursorAdapter,
   traeSkipReason,
+  cursorSkipReason,
 }) {
   if (result.reason === "adapter-setup-failed") {
     logRed("Automatic stop/start recovery was skipped because the Backend is running; setup remains incomplete.");
@@ -1461,6 +1514,7 @@ function printReconcileFailure(result, {
       codebuddySkipReason,
       workbuddySkipReason,
       traeSkipReason,
+      cursorSkipReason,
     });
   }
 }
@@ -1502,10 +1556,10 @@ function clientLifecycleFlags({ clientMode = "all" } = {}) {
 }
 
 function clientModeFor(clients, { includeDsh = false } = {}) {
-  const selected = ["codex", "claude", "dsh", "opencode", "codebuddy", "workbuddy", "trae"].filter((client) => (
+  const selected = ["codex", "claude", "dsh", "opencode", "codebuddy", "workbuddy", "trae", "cursor"].filter((client) => (
     client === "dsh" ? includeDsh : clients.includes(client)
   ));
-  if (selected.length === 7) return "all";
+  if (selected.length === 8) return "all";
   return selected.length > 0 ? selected.join(",") : "none";
 }
 
@@ -1525,6 +1579,7 @@ function clientSelectionMessage(clients, { dshSelected = false } = {}) {
       clients.includes("codebuddy") ? "CodeBuddy CLI" : undefined,
       clients.includes("workbuddy") ? "WorkBuddy" : undefined,
       clients.includes("trae") ? "Trae" : undefined,
+      clients.includes("cursor") ? "Cursor" : undefined,
     ].filter(Boolean);
     return `Configuring MemoraX Code for ${joinedLabels(labels)}.`;
   }
@@ -1534,6 +1589,7 @@ function clientSelectionMessage(clients, { dshSelected = false } = {}) {
   const hasCodeBuddy = clients.includes("codebuddy");
   const hasWorkBuddy = clients.includes("workbuddy");
   const hasTrae = clients.includes("trae");
+  const hasCursor = clients.includes("cursor");
   const labels = [
     hasCodex ? "Codex" : undefined,
     hasClaude ? "Claude Code" : undefined,
@@ -1541,6 +1597,7 @@ function clientSelectionMessage(clients, { dshSelected = false } = {}) {
     hasCodeBuddy ? "CodeBuddy CLI" : undefined,
     hasWorkBuddy ? "WorkBuddy" : undefined,
     hasTrae ? "Trae" : undefined,
+    hasCursor ? "Cursor" : undefined,
   ].filter(Boolean);
   if (labels.length > 0) return `Configuring MemoraX Code for ${joinedLabels(labels)}.`;
   return "Skipping client adapter setup for this setup.";
@@ -1553,7 +1610,8 @@ function clientLabel(client) {
   if (client === "opencode") return "OpenCode";
   if (client === "codebuddy") return "CodeBuddy CLI";
   if (client === "workbuddy") return "WorkBuddy";
-  return "Trae";
+  if (client === "trae") return "Trae";
+  return "Cursor";
 }
 
 function detectedClientMessage(clients, dshProfiles = []) {
@@ -1758,6 +1816,7 @@ function printNextSteps({
   codebuddyAdapterEnabled = true,
   workbuddyAdapterEnabled = true,
   traeAdapterEnabled = true,
+  cursorAdapterEnabled = true,
   traeGlobalHooksActivationRequired = false,
 } = {}) {
   const clientText = enabledClientText({
@@ -1767,6 +1826,7 @@ function printNextSteps({
     codebuddyAdapterEnabled,
     workbuddyAdapterEnabled,
     traeAdapterEnabled,
+    cursorAdapterEnabled,
   });
   if (clientText && existingSetup) {
     logGreen(`${bold("The new Hook runtime is active")}; existing sessions with the stable shell select it on their next user prompt.`);
@@ -1792,6 +1852,7 @@ function printNextSteps({
     codebuddyAdapterEnabled,
     workbuddyAdapterEnabled,
     traeAdapterEnabled,
+    cursorAdapterEnabled,
   });
   if (clientText || !dshAdapterEnabled) {
     log(`If MemoraX Code is not active ${existingSetup ? "on the next prompt" : "in new sessions"}, run ${statusCommands}.`);
@@ -1808,6 +1869,7 @@ function enabledClientText({
   codebuddyAdapterEnabled = true,
   workbuddyAdapterEnabled = true,
   traeAdapterEnabled = true,
+  cursorAdapterEnabled = true,
 } = {}) {
   const labels = [
     codexAdapterEnabled ? "Codex" : undefined,
@@ -1816,6 +1878,7 @@ function enabledClientText({
     codebuddyAdapterEnabled ? "CodeBuddy CLI" : undefined,
     workbuddyAdapterEnabled ? "WorkBuddy" : undefined,
     traeAdapterEnabled ? "Trae" : undefined,
+    cursorAdapterEnabled ? "Cursor" : undefined,
   ].filter(Boolean);
   if (labels.length < 2) return labels[0] ?? "";
   if (labels.length === 2) return `${labels[0]} or ${labels[1]}`;
@@ -1829,6 +1892,7 @@ function statusCommandText({
   codebuddyAdapterEnabled = true,
   workbuddyAdapterEnabled = true,
   traeAdapterEnabled = true,
+  cursorAdapterEnabled = true,
 } = {}) {
   const commands = ["`memorax-code status`"];
   if (codexAdapterEnabled) commands.push("`memorax-code-codex status`");
@@ -1837,6 +1901,7 @@ function statusCommandText({
   if (codebuddyAdapterEnabled) commands.push("`memorax-code-codebuddy status`");
   if (workbuddyAdapterEnabled) commands.push("`memorax-code status --clients workbuddy`");
   if (traeAdapterEnabled) commands.push("`memorax-code-trae status`");
+  if (cursorAdapterEnabled) commands.push("`memorax-code-cursor status`");
   if (commands.length === 1) return commands[0];
   if (commands.length === 2) return `${commands[0]} and ${commands[1]}`;
   return `${commands.slice(0, -1).join(", ")}, and ${commands.at(-1)}`;
@@ -1921,16 +1986,17 @@ function readMemoraxInstallStatus({ diagnose = false } = {}) {
   }
 }
 
-function printUnavailableDiagnostics({ codexSkipReason, claudeSkipReason, opencodeSkipReason, codebuddySkipReason, workbuddySkipReason, traeSkipReason } = {}) {
+function printUnavailableDiagnostics({ codexSkipReason, claudeSkipReason, opencodeSkipReason, codebuddySkipReason, workbuddySkipReason, traeSkipReason, cursorSkipReason } = {}) {
   logRed("MemoraX Code is not enabled for new client sessions.");
   logRed("Check `memorax-code status` and the selected adapter status commands for Backend and integration details.");
-  logRed("If Codex, Claude Code, OpenCode, CodeBuddy CLI, WorkBuddy, Trae, or DeepSeek Harness is open, restart or refresh it after fixing the reported status.");
+  logRed("If Codex, Claude Code, OpenCode, CodeBuddy CLI, WorkBuddy, Trae, Cursor, or DeepSeek Harness is open, restart or refresh it after fixing the reported status.");
   if (codexSkipReason) printCodexSkippedDiagnostics(codexSkipReason);
   if (claudeSkipReason) printClaudeSkippedDiagnostics(claudeSkipReason);
   if (opencodeSkipReason) printOpenCodeSkippedDiagnostics(opencodeSkipReason);
   if (codebuddySkipReason) printCodeBuddySkippedDiagnostics("codebuddy");
   if (workbuddySkipReason) printCodeBuddySkippedDiagnostics("workbuddy");
   if (traeSkipReason) printTraeSkippedDiagnostics(traeSkipReason);
+  if (cursorSkipReason) printCursorSkippedDiagnostics(cursorSkipReason);
   printCommonCommands({
     codexAdapterEnabled: !codexSkipReason,
     claudeAdapterEnabled: !claudeSkipReason,
@@ -1938,6 +2004,7 @@ function printUnavailableDiagnostics({ codexSkipReason, claudeSkipReason, openco
     codebuddyAdapterEnabled: !codebuddySkipReason,
     workbuddyAdapterEnabled: !workbuddySkipReason,
     traeAdapterEnabled: !traeSkipReason,
+    cursorAdapterEnabled: !cursorSkipReason,
   });
 }
 
@@ -1967,6 +2034,11 @@ function printCodeBuddySkippedDiagnostics(client) {
 function printTraeSkippedDiagnostics() {
   logRed("Trae adapter setup was skipped for this setup, so MemoraX Code left Trae unchanged.");
   log("Run `memorax-code start --clients trae` after installing Trae, then enable Global Hooks in Trae Settings and start a new session.");
+}
+
+function printCursorSkippedDiagnostics() {
+  logRed("Cursor adapter setup was skipped for this setup, so MemoraX Code left Cursor unchanged.");
+  log("Run `memorax-code start --clients cursor` after installing Cursor, then restart or refresh Cursor and start a new session.");
 }
 
 function printFailureSuggestions() {
@@ -2001,6 +2073,7 @@ function printCommonCommands({
   codebuddyAdapterEnabled = true,
   workbuddyAdapterEnabled = true,
   traeAdapterEnabled = true,
+  cursorAdapterEnabled = true,
 } = {}) {
   log("Common commands:");
   log("- `memorax-code status`: check the local backend and adapter state.");
@@ -2013,6 +2086,7 @@ function printCommonCommands({
   if (codebuddyAdapterEnabled) log("- `memorax-code-codebuddy status`: verify the managed CodeBuddy CLI plugin and Hook integration.");
   if (workbuddyAdapterEnabled) log("- `memorax-code status --clients workbuddy`: verify the managed WorkBuddy plugin and Hook integration.");
   if (traeAdapterEnabled) log("- `memorax-code-trae status`: verify the managed Trae Global Hooks and Skill integration.");
+  if (cursorAdapterEnabled) log("- `memorax-code-cursor status`: verify the managed Cursor Hooks and Skill integration.");
 }
 
 function memoraxCodeEnabled(statusResult, {
@@ -2022,6 +2096,7 @@ function memoraxCodeEnabled(statusResult, {
   codebuddyAdapterRequired = true,
   workbuddyAdapterRequired = true,
   traeAdapterRequired = true,
+  cursorAdapterRequired = true,
 } = {}) {
   const output = `${statusResult.stdout ?? ""}\n${statusResult.stderr ?? ""}`;
   const normalized = stripAnsi(output);
@@ -2036,6 +2111,7 @@ function memoraxCodeEnabled(statusResult, {
   const codebuddyAdapterOk = /CodeBuddy adapter:\s*ok\b/im.test(normalized);
   const workbuddyAdapterOk = /WorkBuddy adapter:\s*ok\b/im.test(normalized);
   const traeAdapterOk = /Trae adapter:\s*ok\b/im.test(normalized);
+  const cursorAdapterOk = /Cursor adapter:\s*ok\b/im.test(normalized);
   return backendOk
     && serviceOk
     && (!codexAdapterRequired || codexAdapterOk)
@@ -2043,7 +2119,8 @@ function memoraxCodeEnabled(statusResult, {
     && (!opencodeAdapterRequired || opencodeAdapterOk)
     && (!codebuddyAdapterRequired || codebuddyAdapterOk)
     && (!workbuddyAdapterRequired || workbuddyAdapterOk)
-    && (!traeAdapterRequired || traeAdapterOk);
+    && (!traeAdapterRequired || traeAdapterOk)
+    && (!cursorAdapterRequired || cursorAdapterOk);
 }
 
 function log(message) {

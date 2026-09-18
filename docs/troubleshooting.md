@@ -12,6 +12,7 @@ memorax-code status --clients dsh
 memorax-code-opencode doctor
 memorax-code-codebuddy status --json
 memorax-code-trae status --json
+memorax-code-cursor status --json
 memorax-code logs
 ```
 
@@ -22,10 +23,10 @@ same command once with `memorax-cli.cmd`, preserving its arguments and working
 directory. Do not run `Set-ExecutionPolicy` for MemoraX commands.
 
 `memorax-code status` checks the Backend and selected client integrations,
-including DSH, OpenCode, CodeBuddy/WorkBuddy, and Trae. `memorax-cli status`
+including DSH, OpenCode, CodeBuddy/WorkBuddy, Trae, and Cursor. `memorax-cli status`
 checks credentials, scope, and memory switches without printing secrets.
 Codex, Claude Code, and OpenCode provide client-specific `doctor` commands;
-CodeBuddy/WorkBuddy and Trae provide adapter status commands, and DSH uses the
+CodeBuddy/WorkBuddy, Trae, and Cursor provide adapter status commands, and DSH uses the
 shared lifecycle status.
 
 Lifecycle summaries include every selected client. A configured integration
@@ -455,7 +456,9 @@ If no diagnostic explains the symptom, check each stage in order:
    identify correlation or native-history failures. Restore the client's
    access to its own history and retry in a new session; do not substitute a
    Hook's message text or another client's transcript. For Trae, completion
-   instead requires its validated `UserPromptSubmit`/`Stop` pair.
+   instead requires its validated `UserPromptSubmit`/`Stop` pair. Cursor requires
+   matching native database content and a completed Hook;
+   see [Cursor writeback checks](#cursor-hooks-skill-or-automatic-writeback-is-unavailable).
 3. Check whether the turn was rejected before buffering. In
    `memory.automatic_writeback`, `skipReason=disabled` means the effective
    settings rejected it; `workspace_scope_*` reasons require the scope checks
@@ -668,6 +671,66 @@ CodeBuddy or WorkBuddy after upgrading to retire older Hook implementations.
 If the directory remains after all older Hook processes have exited, remove
 only that leftover directory and retry. Keep `pending.json` and any regular
 file lock; a regular file is the current lock format.
+
+## Cursor Hooks, Skill, or automatic writeback is unavailable
+
+```sh
+memorax-code start --clients cursor
+memorax-code-cursor status --json
+```
+
+`start --clients` selects the full managed client set; include any other
+integrations you want to retain. Cursor uses `CURSOR_HOME`, otherwise `~/.cursor`;
+`--cursor-home` overrides the root for a command. Setup manages only its marked
+`sessionStart`, `beforeSubmitPrompt`, `afterAgentResponse`, and `stop` entries in
+`hooks.json`, plus `skills/memorax-code/`. It does not change Cursor's third-party
+integration setting or require a Claude Code installation.
+
+Restart or refresh Cursor, open a new conversation in a single-root workspace,
+and send a prompt. `cursorHooks.status` changes from `unverified` to `observed`
+when a managed Hook runs. Seeing an inherited Claude Skill alone does not prove
+that the native Cursor integration is configured. For `hooks_invalid`, repair
+the existing JSON before rerunning start. For `skill_conflict`, preserve or move
+the unmanaged Skill deliberately before installing the managed one.
+
+The conversation database uses Cursor's application-data directory, not
+`CURSOR_HOME`. Check the [native database paths](configuration.md#cursor-integration-paths)
+for your platform. If Cursor uses a custom `--user-data-dir`, set
+`MEMORAX_CODE_CURSOR_DATABASE_PATH` to its absolute
+`User/globalStorage/state.vscdb` path and restart the integration. Enabling the
+adapter saves this explicit path for later GUI-launched Hooks. A relative,
+empty, or malformed override is rejected with `database_path_invalid`; it does
+not select a different profile. `database_unavailable` means the selected file
+could not be opened or read. Keep Cursor's native database and WAL together;
+do not substitute an exported JSONL or another client's history.
+
+For `database_runtime_unavailable`, run the Backend with Node.js 22.13 or later
+and restart it. Cursor automatic Add requires built-in `node:sqlite`; the
+remaining integrations and explicit CLI commands keep their existing runtime
+requirements. A configured or observed Hook alone does not prove that this
+database capability is available.
+
+Use the Skill for CLI Search and manual Add. This integration uses
+`beforeSubmitPrompt` context for personal memory and reminders; it does not run
+automatic prompt retrieval, even when it is enabled for other clients. Follow the
+session-start instructions to provide the explicit Cursor client/session
+environment for CLI commands; shell tools are not assumed to inherit Hook
+environment variables.
+
+Automatic Add requires native database content matching the observed generation,
+original user, and final-response digest, plus a completed Stop. Missing content
+is retried for up to 30 seconds, including after a Backend restart within that
+deadline. A missing initial transcript path no longer blocks automatic Add.
+
+`native_generation_pending`, `native_turn_pending`, and
+`native_final_response_pending` indicate that matching content is not yet visible.
+`continuation_user_unbound` means Continue lacks an observed terminal predecessor;
+`native_continuation_replaced` and `native_continuation_prefix_changed` indicate
+that the captured native binding changed. Unsupported content, prompt mismatch,
+ambiguous final answers, cancellation, or error are not reconstructed from Hook
+text, UI bubbles, or JSONL. Start an ordinary prompt to establish fresh authority,
+or explicitly save a selected lesson through the Skill. See
+[Cursor configuration](configuration.md#cursor-integration-paths).
 
 ## Trae Global Hooks or Skill is inactive
 

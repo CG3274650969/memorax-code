@@ -1,0 +1,406 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
+import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { test } from "node:test";
+import { createCursorMemoryHookRuntime } from "../../../dist/clients/cursor/memory-hook-runtime.js";
+import { cursorTextDigest } from "../../../dist/clients/cursor/database-turn.js";
+import { cursorTurnStatePath } from "../../../dist/clients/cursor/turn-store.js";
+import { createRepositoryMemorySessionRuntime } from "../../../dist/memory/repository-session.js";
+import { readCurrentTraceTurn } from "../../../dist/trace/store.js";
+import { withJsonFileLockAsync } from "../../../../memorax-code-adapter-common/src/config-utils.mjs";
+import { databaseFixture, nativeField, nativeMessage } from "./support/database-fixtures.mjs";
+
+const prompt = "Keep the synthetic Cursor module boundary stable.";
+const answer = "The synthetic Cursor module boundary is preserved.";
+async function fixture() {
+  const db = await databaseFixture();
+  const root = await realpath(db.directory);
+  const home = join(root, "memorax"), workspace = join(root, "workspace");
+  await Promise.all([mkdir(home), mkdir(workspace)]);
+  const start = { version: 1, client: "cursor", sessionId: db.sessionId,
+    turnId: randomUUID(), cwd: workspace, prompt, databasePath: db.databasePath };
+  const userMessageId = randomUUID();
+  const native = (command = start, steps = [{ type: "assistantMessage", text: answer }]) => ({
+    requestId: command.turnId, userPrompt: command.prompt, userMessageId, steps,
+  });
+  const env = {
+    MEMORAX_CODE_HOME: home, MEMORAX_CODE_MEMORY_RETRIEVAL_ENABLED: "true",
+    MEMORAX_CODE_MEMORY_WRITEBACK_ENABLED: "true", MEMORAX_CODE_MEMORY_WRITEBACK_BUFFER_ENABLED: "false",
+    MEMORAX_CODE_CURSOR_TRACE_ENABLED: "false", MEMORAX_CODE_MEMORAX_ENDPOINT: "http://memorax.test",
+    MEMORAX_CODE_MEMORAX_API_KEY: "synthetic-secret", MEMORAX_CODE_MEMORAX_USER_ID: "cursor-test-user",
+  };
+  return { ...db, root, home, workspace, start, env, native,
+    append: () => db.write({ latestGenerationId: start.turnId, turns: [native()] }) };
+}
+function response(start, digest = cursorTextDigest(answer)) {
+  const { prompt: _prompt, ...identity } = start;
+  return { ...identity, phase: "response", responseDigest: digest };
+}
+function stop(start, status = "completed") {
+  const { prompt: _prompt, ...identity } = start;
+  return { ...identity, phase: "stop", status };
+}
+function runtime(f, overrides = {}) {
+  const writes = [];
+  const instance = createCursorMemoryHookRuntime({ env: f.env, memoraxCodeHome: f.home,
+    fetchImpl: async () => { throw new Error("Cursor hooks must not auto-search"); },
+    automaticWriteback: (input) => { writes.push(input); return { accepted: true }; },
+    databaseRetryDelayMs: 20, databaseRetryWindowMs: 2000, ...overrides });
+  return { instance, writes };
+}
+const observeResponse = (instance, start, text = answer) => instance.writeback(response(start, cursorTextDigest(text)));
+const readState = async (f) => JSON.parse(await readFile(cursorTurnStatePath(f.home, f.sessionId), "utf8"));
+async function until(predicate) {
+  for (let i = 0; i < 100; i++) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail("Expected pending writeback to complete");
+}
+
+test("Cursor first turn reads DB QA without transcript or starting content, once across restart", async () => {
+  const f = await fixture(); const first = runtime(f); let second;
+  try {
+    assert.equal((await first.instance.recordTurnStart(f.start)).recorded, true);
+    await f.append();
+    assert.equal((await observeResponse(first.instance, f.start)).reason, "completion_event_missing");
+    assert.deepEqual(await first.instance.writeback(stop(f.start)), { ok: true, scheduled: true });
+    assert.equal(first.writes.length, 1);
+    assert.equal(first.writes[0].client, "cursor");
+    assert.equal(first.writes[0].userText, prompt);
+    assert.equal(first.writes[0].assistantText, answer);
+    assert.equal(first.instance.size(), 0);
+    const persisted = await readState(f);
+    assert.equal(persisted.active.metadata, undefined);
+    for (const text of [prompt, answer, "synthetic-secret"]) assert.equal(JSON.stringify(persisted).includes(text), false);
+    if (process.platform !== "win32") assert.equal((await stat(cursorTurnStatePath(f.home, f.sessionId))).mode & 0o777, 0o600);
+    first.instance.close(); second = runtime(f);
+    assert.equal((await second.instance.writeback(stop(f.start))).reason, "already_accepted_locally");
+    assert.equal(second.writes.length, 0);
+  } finally { first.instance.close(); second?.instance.close(); await f.cleanup(); }
+});
+
+test("Cursor automatic Add excludes native Hook reminders and keeps the user-text digest authoritative", async (t) => {
+  const contexts = [
+    { event: "beforeSubmitPrompt", text: "Synthetic Profile Memory: prefer concise review comments." },
+    { event: "beforeSubmitPrompt", text: "Synthetic periodic reminder: consult the memorax-code Skill and stored procedures." },
+  ];
+  for (const matches of [true, false]) await t.test(matches ? "reminders excluded" : "reminders cannot replace user text", async () => {
+    const f = await fixture(); const { instance, writes } = runtime(f);
+    try {
+      await instance.recordTurnStart(f.start);
+      const promptDigest = (await readState(f)).active.promptDigest;
+      assert.equal(promptDigest, cursorTextDigest(prompt));
+      const hookContexts = [...contexts, { event: "beforeSubmitPrompt", text: prompt }];
+      f.write({ latestGenerationId: f.start.turnId, turns: [{
+        ...f.native(),
+        userPrompt: matches ? prompt : "A different native user question.",
+        user: { extra: hookContexts.map(({ event, text }) => nativeField(21,
+          nativeMessage(nativeField(1, event), nativeField(2, text)))) },
+      }] });
+      await observeResponse(instance, f.start);
+      const result = await instance.writeback(stop(f.start));
+      assert.equal((await readState(f)).active.promptDigest, promptDigest);
+      if (matches) {
+        assert.deepEqual(result, { ok: true, scheduled: true });
+        assert.equal(writes.length, 1);
+        assert.equal(writes[0].userText, prompt);
+        assert.equal(writes[0].assistantText, answer);
+        for (const { text } of contexts) assert.equal(JSON.stringify(writes[0]).includes(text), false);
+      } else {
+        assert.equal(result.reason, "native_prompt_mismatch");
+        assert.equal(writes.length, 0);
+      }
+    } finally { instance.close(); await f.cleanup(); }
+  });
+});
+
+test("Cursor distinguishes recorded starts from wrong-client, duplicate and retired acknowledgements", async () => {
+  const f = await fixture(); const { instance } = runtime(f);
+  try {
+    assert.deepEqual(await instance.recordTurnStart({ ...f.start, client: "codex" }), { ok: true, recorded: false });
+    assert.equal((await instance.recordTurnStart(f.start)).recorded, true);
+    assert.deepEqual(await instance.recordTurnStart(f.start), { ok: true, recorded: false });
+    const next = { ...f.start, turnId: randomUUID(), prompt: "The next registered prompt." };
+    assert.equal((await instance.recordTurnStart(next)).recorded, true);
+    assert.deepEqual(await instance.recordTurnStart(f.start), { ok: true, recorded: false });
+    assert.equal((await readState(f)).active.turnId, next.turnId);
+  } finally { instance.close(); await f.cleanup(); }
+});
+
+test("Cursor lock-timeout acknowledgement does not claim registration and a later prompt can register", async () => {
+  const f = await fixture(); const { instance } = runtime(f, { turnStateLockTimeoutMs: 10 });
+  let release, entered;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const locked = new Promise((resolve) => { entered = resolve; });
+  const holder = withJsonFileLockAsync(cursorTurnStatePath(f.home, f.sessionId), async () => { entered(); await gate; });
+  try {
+    await locked;
+    assert.deepEqual(await instance.recordTurnStart(f.start), { ok: true, recorded: false });
+    await assert.rejects(readState(f), { code: "ENOENT" });
+    assert.equal(instance.size(), 0);
+    release(); await holder;
+    const next = { ...f.start, turnId: randomUUID(), prompt: "The first successfully registered prompt." };
+    assert.equal((await instance.recordTurnStart(next)).recorded, true);
+    assert.equal((await readState(f)).active.turnId, next.turnId);
+  } finally { release(); await holder; instance.close(); await f.cleanup(); }
+});
+
+test("Cursor delayed DB persistence recovers without another Hook, including Backend restart", async (t) => {
+  for (const restart of [false, true]) await t.test(String(restart), async () => {
+    const f = await fixture(); let active = runtime(f, { databaseRetryDelayMs: 100 });
+    try {
+      await active.instance.recordTurnStart(f.start);
+      assert.equal((await active.instance.writeback(stop(f.start))).reason, "response_digest_missing");
+      assert.equal((await observeResponse(active.instance, f.start)).scheduled, false);
+      assert.ok((await readState(f)).active.retryUntil);
+      if (restart) { active.instance.close(); active = runtime(f); }
+      await f.append();
+      await until(() => active.writes.length === 1);
+      assert.equal(active.writes[0].assistantText, answer);
+      assert.equal((await active.instance.writeback(stop(f.start))).reason, "already_accepted_locally");
+    } finally { active.instance.close(); await f.cleanup(); }
+  });
+});
+
+test("Cursor Continue binds the aborted native user and selects only the appended final response", async () => {
+  const f = await fixture(); let active = runtime(f);
+  const partial = [{ type: "thinkingMessage", text: "Synthetic reasoning" },
+    { type: "toolCall", text: "Synthetic tool" }, { type: "assistantMessage", text: "Incomplete answer" }];
+  const continued = { ...f.start, turnId: randomUUID(), prompt: "" };
+  try {
+    await active.instance.recordTurnStart(f.start);
+    f.write({ latestGenerationId: f.start.turnId, turns: [f.native(f.start, partial)] });
+    assert.equal((await active.instance.writeback(stop(f.start, "aborted"))).reason, "interrupted");
+    assert.equal(active.writes.length, 0);
+    await active.instance.recordTurnStart(continued);
+    assert.equal((await readState(f)).active.continuation.requestId, f.start.turnId);
+    active.instance.close(); active = runtime(f);
+    await observeResponse(active.instance, continued);
+    f.write({ latestGenerationId: continued.turnId,
+      turns: [f.native(f.start, [...partial, { type: "assistantMessage", text: answer }])] });
+    assert.deepEqual(await active.instance.writeback(stop(continued)), { ok: true, scheduled: true });
+    assert.equal(active.writes.length, 1);
+    assert.equal(active.writes[0].userText, prompt);
+    assert.equal(active.writes[0].assistantText, answer);
+    assert.equal(active.writes[0].repositoryScope.boundWorkspaceRoot, f.workspace);
+  } finally { active.instance.close(); await f.cleanup(); }
+});
+
+test("Cursor edits replace native request identity without relying on a JSONL prefix", async () => {
+  const f = await fixture(); const { instance, writes } = runtime(f);
+  const edited = { ...f.start, turnId: randomUUID(), prompt: "The edited synthetic question." };
+  try {
+    await instance.recordTurnStart(f.start);
+    await observeResponse(instance, f.start);
+    await instance.recordTurnStart(edited);
+    f.write({ latestGenerationId: edited.turnId, turns: [f.native(edited)] });
+    assert.equal((await instance.writeback(stop(f.start))).reason, "generation_replaced");
+    await observeResponse(instance, edited);
+    assert.equal((await instance.writeback(stop(edited))).scheduled, true);
+    assert.equal(writes.length, 1); assert.equal(writes[0].userText, edited.prompt);
+  } finally { instance.close(); await f.cleanup(); }
+});
+
+test("Cursor unbound Continue retains scope and CLI identity but never guesses a native user", async () => {
+  const f = await fixture(); const { instance, writes } = runtime(f);
+  const start = { ...f.start, prompt: "" };
+  try {
+    await f.append(); assert.equal((await instance.recordTurnStart(start)).recorded, true);
+    const current = await readCurrentTraceTurn({ client: "cursor", sessionId: f.sessionId, memoraxCodeHome: f.home, env: f.env });
+    assert.equal(current.traceContext.turnId, start.turnId);
+    await observeResponse(instance, start);
+    assert.equal((await instance.writeback(stop(start))).reason, "continuation_user_unbound");
+    assert.equal(writes.length, 0);
+  } finally { instance.close(); await f.cleanup(); }
+});
+
+test("Cursor rejects changed database or workspace authority", async (t) => {
+  for (const field of ["databasePath", "cwd"]) await t.test(field, async () => {
+    const f = await fixture(); const { instance, writes } = runtime(f);
+    try {
+      await instance.recordTurnStart(f.start); await observeResponse(instance, f.start); await f.append();
+      assert.equal((await instance.writeback({ ...stop(f.start), [field]: join(f.root, "other") })).reason, "database_or_workspace_changed");
+      assert.equal(writes.length, 0); assert.ok((await readState(f)).active.metadata);
+    } finally { instance.close(); await f.cleanup(); }
+  });
+});
+
+test("Cursor pending retry stops at its deadline and cannot write after a new generation", async () => {
+  const f = await fixture(); const { instance, writes } = runtime(f, { databaseRetryWindowMs: 40, databaseRetryDelayMs: 10 });
+  try {
+    await instance.recordTurnStart(f.start); await observeResponse(instance, f.start); await instance.writeback(stop(f.start));
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await f.append(); await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(writes.length, 0);
+    await instance.recordTurnStart({ ...f.start, turnId: randomUUID(), prompt: "Next question" });
+    assert.equal((await instance.writeback(stop(f.start))).reason, "generation_replaced");
+    // Replacement gets one last exact read before retiring the old pending turn.
+    assert.equal(writes.length, 1);
+    await new Promise((resolve) => setTimeout(resolve, 40)); assert.equal(writes.length, 1);
+  } finally { instance.close(); await f.cleanup(); }
+});
+
+test("Cursor concurrent starts keep the CLI current-turn bridge on the newer generation", async () => {
+  const f = await fixture("concurrent-starts");
+  const base = createRepositoryMemorySessionRuntime();
+  let releaseFirst;
+  let markFirstEntered;
+  const entered = new Promise((resolve) => { markFirstEntered = resolve; });
+  const gate = new Promise((resolve) => { releaseFirst = resolve; });
+  const first = runtime(f, {
+    repositoryMemorySession: {
+      async resolve(input) { markFirstEntered(); await gate; return await base.resolve(input); },
+      close() {},
+    },
+  });
+  const second = runtime(f);
+  const next = { ...f.start, turnId: randomUUID(), prompt: "A newer concurrent prompt." };
+  const pending = [];
+  try {
+    pending.push(first.instance.recordTurnStart(f.start));
+    await entered;
+    pending.push(second.instance.recordTurnStart(next));
+    releaseFirst();
+    await Promise.all(pending);
+    const current = await readCurrentTraceTurn({ client: "cursor", sessionId: f.sessionId, memoraxCodeHome: f.home, env: f.env });
+    assert.equal(current.ok, true);
+    assert.equal(current.traceContext.turnId, next.turnId);
+    assert.equal((await readState(f)).active.turnId, next.turnId);
+    assert.equal((await readState(f)).active.state, "open");
+  } finally {
+    releaseFirst();
+    await Promise.allSettled(pending);
+    first.instance.close(); second.instance.close(); base.close(); await f.cleanup();
+  }
+});
+
+
+test("Cursor local enqueue rejection retains durable and live metadata for retry", async () => {
+  const f = await fixture("enqueue-rejected");
+  let accepted = false;
+  let calls = 0, acceptedWrites = 0;
+  const { instance } = runtime(f, { automaticWriteback: () => { calls += 1; if (accepted) acceptedWrites += 1; return accepted ? { accepted: true } : { accepted: false, reason: "disabled" }; } });
+  try {
+    await instance.recordTurnStart(f.start);
+    await observeResponse(instance, f.start);
+    await f.append();
+    assert.equal((await instance.writeback(stop(f.start))).reason, "disabled");
+    assert.equal(instance.size(), 1);
+    assert.ok((await readState(f)).active.metadata);
+    accepted = true;
+    const result = await instance.writeback(stop(f.start));
+    assert.ok(result.scheduled || result.reason === "already_accepted_locally");
+    assert.equal(instance.size(), 0);
+    assert.ok(calls >= 2);
+    assert.equal(acceptedWrites, 1);
+  } finally { instance.close(); await f.cleanup(); }
+});
+
+
+test("Cursor abort, duplicate starts, response conflicts and replacement fail closed", async (t) => {
+  for (const variant of ["aborted", "duplicate_start", "conflicting_response_events", "generation_replaced"]) await t.test(variant, async () => {
+    const f = await fixture(variant);
+    const { instance, writes } = runtime(f);
+    try {
+      await instance.recordTurnStart(f.start);
+      await observeResponse(instance, f.start);
+      if (variant === "aborted") await instance.writeback(stop(f.start, "aborted"));
+      if (variant === "duplicate_start") await instance.recordTurnStart(f.start);
+      if (variant === "conflicting_response_events") await observeResponse(instance, f.start, "A conflicting answer.");
+      if (variant === "generation_replaced") await instance.recordTurnStart({ ...f.start, turnId: randomUUID(), prompt: "The replacement prompt." });
+      await f.append();
+      const result = await instance.writeback(stop(f.start));
+      assert.equal(result.reason, variant === "aborted" ? "interrupted" : variant);
+      assert.equal(writes.length, 0);
+      if (variant === "aborted") {
+        assert.equal(instance.size(), 0);
+        assert.equal((await readState(f)).active.metadata, undefined);
+      }
+    } finally { instance.close(); await f.cleanup(); }
+  });
+});
+
+
+test("Cursor persisted schemas reject string-coercible arrays and cross-client identity", async (t) => {
+  for (const field of ["state", "stopStatus", "scopeKind", "client"]) await t.test(field, async () => {
+    const f = await fixture(`invalid-${field}`);
+    const { instance, writes } = runtime(f);
+    try {
+      await instance.recordTurnStart(f.start);
+      await observeResponse(instance, f.start);
+      await f.append();
+      const record = await readState(f);
+      if (field === "state") record.active.state = ["open"];
+      if (field === "stopStatus") record.active.stopStatus = ["completed"];
+      if (field === "scopeKind") record.repositoryScope.scopeKind = [record.repositoryScope.scopeKind];
+      if (field === "client") record.client = "codex";
+      await writeFile(cursorTurnStatePath(f.home, f.sessionId), JSON.stringify(record));
+      assert.equal((await instance.writeback(stop(f.start))).reason, "turn_state_unavailable");
+      assert.equal(writes.length, 0);
+    } finally { instance.close(); await f.cleanup(); }
+  });
+});
+
+
+test("Cursor independent processes serialize completion and enqueue at most once", async () => {
+  const f = await fixture("process-lock");
+  const { instance } = runtime(f);
+  try {
+    await instance.recordTurnStart(f.start);
+    await observeResponse(instance, f.start);
+    instance.close();
+    await f.append();
+    const runtimeUrl = new URL("../../../dist/clients/cursor/memory-hook-runtime.js", import.meta.url).href;
+    const code = `
+      const { createCursorMemoryHookRuntime } = await import(process.argv[1]);
+      let enqueueCount = 0;
+      const runtime = createCursorMemoryHookRuntime({
+        env: process.env, databaseRetryDelayMs: 1000,
+        automaticWriteback: () => { enqueueCount++; return { accepted: true }; },
+        fetchImpl: async () => { throw new Error('Unexpected network'); },
+      });
+      try { const result = await runtime.writeback(JSON.parse(process.argv[2])); console.log(JSON.stringify({result, enqueueCount})); }
+      finally { runtime.close(); }
+    `;
+    const run = () => new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ["--input-type=module", "-e", code, runtimeUrl, JSON.stringify(stop(f.start))], {
+        env: { PATH: process.env.PATH, HOME: f.root, ...f.env }, stdio: ["ignore", "pipe", "pipe"],
+      });
+      let out = "", error = "";
+      child.stdout.on("data", (data) => { out += data; });
+      child.stderr.on("data", (data) => { error += data; });
+      child.once("error", reject);
+      child.once("exit", (exitCode) => {
+        if (exitCode !== 0) reject(new Error(error || `child exited ${exitCode}`));
+        else { try { resolve(JSON.parse(out.trim())); } catch (parseError) { reject(parseError); } }
+      });
+    });
+    const results = await Promise.all([run(), run()]);
+    assert.equal(results.reduce((total, item) => total + item.enqueueCount, 0), 1);
+    assert.equal(results.filter((item) => item.result.scheduled).length, 1);
+    assert.equal(results.find((item) => !item.result.scheduled).result.reason, "already_accepted_locally");
+  } finally { instance.close(); await f.cleanup(); }
+});
+
+
+test("Cursor restart retries temporary contention on the pending session lock", async () => {
+  const f = await fixture(); const first = runtime(f, { databaseRetryDelayMs: 1000 }); let second;
+  let release, entered;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const locked = new Promise((resolve) => { entered = resolve; });
+  let holder;
+  try {
+    await first.instance.recordTurnStart(f.start); await observeResponse(first.instance, f.start);
+    await first.instance.writeback(stop(f.start)); first.instance.close(); await f.append();
+    holder = withJsonFileLockAsync(cursorTurnStatePath(f.home, f.sessionId), async () => { entered(); await gate; });
+    await locked;
+    second = runtime(f, { turnStateLockTimeoutMs: 10, databaseRetryDelayMs: 10 });
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    release(); await holder;
+    await until(() => second.writes.length === 1);
+    assert.equal(second.writes[0].assistantText, answer);
+  } finally { release(); await holder; first.instance.close(); second?.instance.close(); await f.cleanup(); }
+});

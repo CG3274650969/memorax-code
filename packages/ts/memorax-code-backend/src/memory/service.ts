@@ -20,6 +20,7 @@ import {
 } from "../clients/opencode/memory-hook-runtime.js";
 import { createCodeBuddyMemoryHookRuntime, type CodeBuddyMemoryHookWritebackResult } from "../clients/codebuddy/memory-hook-runtime.js";
 import { createTraeMemoryHookRuntime, type TraeMemoryHookWritebackResult } from "../clients/trae/memory-hook-runtime.js";
+import { createCursorMemoryHookRuntime, type CursorMemoryHookWritebackResult } from "../clients/cursor/memory-hook-runtime.js";
 import { createMemoryTurnCoordinator } from "./turn-coordinator.js";
 import {
   createRepositoryMemorySessionRuntime,
@@ -42,7 +43,8 @@ type MemoryHookWritebackResult =
   | OpenCodeMemoryHookWritebackResult
   | DshMemoryHookWritebackResult
   | CodeBuddyMemoryHookWritebackResult
-  | TraeMemoryHookWritebackResult;
+  | TraeMemoryHookWritebackResult
+  | CursorMemoryHookWritebackResult;
 
 export type MemoryService = {
   recordTurnStart(command: TurnStartCommand): Promise<MemoryHookTurnStartResult>;
@@ -114,6 +116,12 @@ export function createMemoryService(options: MemoryServiceOptions = {}): MemoryS
     repositoryMemorySession,
     turnCoordinator,
   });
+  const cursorHook = createCursorMemoryHookRuntime({
+    ...options,
+    pendingQuotaNotice,
+    repositoryMemorySession,
+    turnCoordinator,
+  });
   async function observeWriteback(command: WritebackCommand, pending: Promise<MemoryHookWritebackResult>): Promise<MemoryHookWritebackResult> {
     const result = await pending;
     if (!result.scheduled) {
@@ -148,6 +156,8 @@ export function createMemoryService(options: MemoryServiceOptions = {}): MemoryS
           return await workBuddyHook.recordTurnStart(command);
         case "trae":
           return await traeHook.recordTurnStart(command);
+        case "cursor":
+          return await cursorHook.recordTurnStart(command);
       }
       return unsupportedMemoryHookCommand(command);
     },
@@ -167,6 +177,8 @@ export function createMemoryService(options: MemoryServiceOptions = {}): MemoryS
           return await observeWriteback(command, workBuddyHook.writeback(command));
         case "trae":
           return await observeWriteback(command, traeHook.writeback(command));
+        case "cursor":
+          return await observeWriteback(command, cursorHook.writeback(command));
       }
       return unsupportedMemoryHookCommand(command);
     },
@@ -183,6 +195,7 @@ export function createMemoryService(options: MemoryServiceOptions = {}): MemoryS
       codeBuddyHook.close();
       workBuddyHook.close();
       traeHook.close();
+      cursorHook.close();
       turnCoordinator.close();
       repositoryMemorySession.close();
       automaticWriteback.close();

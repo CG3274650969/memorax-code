@@ -1,0 +1,168 @@
+#!/usr/bin/env node
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { delimiter, dirname, join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { createDatabaseFixture } from "../packages/ts/memorax-code-backend/test/clients/cursor/support/database-fixtures.mjs";
+
+// The input is an already materialized npm package. Every mutable client,
+// native database, Backend record, and provider request belongs to this fixture.
+const packageRoot = resolve(process.argv[2] ?? "");
+assert.ok(process.argv[2], "Usage: node scripts/cursor-npm-package-smoke.mjs PACKAGE_ROOT");
+const packageManifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
+assert.equal(packageManifest.name, "@memorax/memorax-code");
+const root = await realpath(await mkdtemp(join(tmpdir(), "memorax-cursor-package-smoke-")));
+const home = join(root, "home");
+const stateHome = join(root, "state");
+const cursorHome = join(root, "cursor");
+const workspace = join(root, "workspace");
+const databasePath = join(root, "native-user-data", "User", "globalStorage", "state.vscdb");
+const requests = [];
+const provider = createServer(async (request, response) => {
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+  const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+  requests.push({ path: request.url, body });
+  response.writeHead(200, { "content-type": "application/json" });
+  response.end(JSON.stringify({ success: true, data: { task_id: "cursor-smoke-task", status: "completed", items: [] } }));
+});
+await new Promise((accept) => provider.listen(0, "127.0.0.1", accept));
+const reserve = createServer();
+await new Promise((accept) => reserve.listen(0, "127.0.0.1", accept));
+const port = reserve.address().port;
+await new Promise((accept) => reserve.close(accept));
+const env = {
+  PATH: [dirname(process.execPath), ...(process.platform === "win32"
+    ? [join(process.env.SystemRoot ?? "C:\\Windows", "System32")]
+    : ["/usr/bin", "/bin", "/usr/sbin", "/sbin"])].join(delimiter),
+  ...(process.platform === "win32" ? {
+    SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR, ComSpec: process.env.ComSpec,
+    PATHEXT: process.env.PATHEXT,
+  } : {}),
+  HOME: home, USERPROFILE: home, TMPDIR: root, TMP: root, TEMP: root,
+  APPDATA: join(home, "AppData", "Roaming"), LOCALAPPDATA: join(home, "AppData", "Local"),
+  npm_config_cache: join(root, "npm-cache"),
+  MEMORAX_CODE_HOME: stateHome, CURSOR_HOME: cursorHome,
+  MEMORAX_CODE_CURSOR_DATABASE_PATH: databasePath,
+  CODEX_HOME: join(root, "codex"), CLAUDE_CONFIG_DIR: join(root, "claude"),
+  DSH_HOME: join(root, "dsh"), OPENCODE_CONFIG_DIR: join(root, "opencode"),
+  CODEBUDDY_HOME: join(root, "codebuddy"), CODEBUDDY_CONFIG_DIR: join(root, "codebuddy"),
+  WORKBUDDY_HOME: join(root, "workbuddy"), TRAE_HOME: join(root, "trae"), TRAE_CN_HOME: join(root, "trae"),
+  XDG_CONFIG_HOME: join(root, "xdg-config"),
+  MEMORAX_CODE_CODEX_COMMAND: join(root, "missing-codex"),
+  MEMORAX_CODE_CLAUDE_COMMAND: join(root, "missing-claude"),
+  MEMORAX_CODE_CODEBUDDY_COMMAND: join(root, "missing-codebuddy"),
+  MEMORAX_CODE_WORKBUDDY_COMMAND: join(root, "missing-workbuddy"),
+  MEMORAX_CODE_MEMORAX_ENDPOINT: "http://127.0.0.1:" + provider.address().port,
+  MEMORAX_CODE_MEMORAX_API_KEY: "cursor-smoke-fixture-key",
+  MEMORAX_CODE_MEMORAX_USER_ID: "cursor-smoke-fixture-user",
+  MEMORAX_CODE_MEMORY_RETRIEVAL_ENABLED: "false",
+  MEMORAX_CODE_MEMORY_WRITEBACK_ENABLED: "true",
+  MEMORAX_CODE_MEMORY_WRITEBACK_BUFFER_ENABLED: "false",
+  MEMORAX_CODE_MEMORY_WRITEBACK_CHUNK_ENABLED: "false",
+  MEMORAX_CODE_CURSOR_ENSURE_BACKEND: "false",
+  MEMORAX_CODE_AUTO_UPDATE: "false",
+};
+const cli = join(packageRoot, "bin", "memorax-code.mjs");
+const lifecycleArgs = ["--home", stateHome, "--cursor-home", cursorHome, "--port", String(port), "--clients", "cursor", "--json"];
+const runCli = async (command, extra = []) => {
+  try { return JSON.parse(await run(process.execPath, [cli, command, ...lifecycleArgs, ...extra])); }
+  catch (error) {
+    const log = await readFile(join(stateHome, "runtime", "backend", "backend.log"), "utf8").catch(() => "");
+    throw new Error(error.message + "\n" + log, { cause: error });
+  }
+};
+const hooksPath = join(cursorHome, "hooks.json");
+const userConfig = { version: 1, customSetting: "preserved", hooks: { stop: [{ command: "user-owned-hook" }] } };
+let nativeDatabase;
+try {
+  await Promise.all([home, cursorHome, workspace].map((path) => mkdir(path, { recursive: true })));
+  await writeFile(hooksPath, JSON.stringify(userConfig));
+  const started = await runCli("start");
+  assert.equal(started.cursorAdapter.enabled, true);
+  assert.equal(started.claudeAdapter, undefined);
+  const manifest = JSON.parse(await readFile(hooksPath, "utf8"));
+  const sessionId = randomUUID();
+  const generationId = randomUUID();
+  nativeDatabase = await createDatabaseFixture(databasePath, { sessionId, latestGenerationId: generationId, turns: [] });
+  nativeDatabase.database.exec("PRAGMA journal_mode = WAL");
+  const payload = {
+    conversation_id: sessionId, generation_id: generationId,
+    workspace_roots: [workspace],
+  };
+  const hookEnv = { ...env };
+  delete hookEnv.MEMORAX_CODE_CURSOR_DATABASE_PATH;
+  const hook = async (event, fields = {}) => {
+    const installed = manifest.hooks[event].find(({ command }) => command !== "user-owned-hook");
+    assert.ok(installed?.command, "Missing installed " + event + " Hook");
+    return run(installed.command, [], { shell: true, env: hookEnv,
+      input: JSON.stringify({ ...payload, hook_event_name: event, ...fields }) });
+  };
+  const session = JSON.parse(await hook("sessionStart"));
+  assert.equal(session.env.MEMORAX_CODE_MEMORY_CLI_TRACE_CLIENT, "cursor");
+  const prompt = "Use English for this synthetic Cursor fixture.";
+  const reply = "I will use English for this synthetic Cursor fixture.";
+  assert.equal(JSON.parse(await hook("beforeSubmitPrompt", { prompt })).continue, true);
+  nativeDatabase.write({ latestGenerationId: generationId, turns: [{ requestId: generationId, prompt,
+    steps: [
+      { type: "thinkingMessage", text: "Private synthetic thinking must remain excluded." },
+      { type: "toolCall", text: "Synthetic tool payload must remain excluded." },
+      { type: "assistantMessage", text: reply },
+    ],
+  }] });
+  await hook("afterAgentResponse", { text: reply });
+  assert.equal(requests.length, 0, "Response observation alone must not trigger Add");
+  await hook("stop", { status: "completed" });
+  for (let attempt = 0; requests.length === 0 && attempt < 50; attempt += 1) await delay(50);
+  assert.equal(requests.length, 1, "Exactly one provider request must reach the loopback fixture");
+  assert.equal(requests[0].path, "/v1/memories/add");
+  assert.deepEqual(requests[0].body.messages.map(({ role, content }) => ({ role, content })), [
+    { role: "user", content: prompt }, { role: "assistant", content: reply },
+  ]);
+  assert.equal(JSON.stringify(requests[0].body).includes(root), false, "Local paths must not reach MemoraX");
+  await hook("stop", { status: "completed" });
+  await delay(100);
+  assert.equal(requests.length, 1, "Duplicate stop must not enqueue another Add");
+  const status = await runCli("status");
+  assert.equal(status.cursorAdapter.cursorHooks.runtimeObserved, true);
+  assert.equal((await runCli("stop")).ok, true);
+  assert.deepEqual(JSON.parse(await readFile(hooksPath, "utf8")), userConfig);
+  const removed = await runCli("uninstall", ["--no-npm-uninstall"]);
+  assert.equal(removed.cursorPlugin.ok, true);
+  assert.equal(removed.npmPackageRemoval.skipped, true);
+  assert.deepEqual(JSON.parse(await readFile(hooksPath, "utf8")), userConfig);
+  await assert.rejects(stat(join(cursorHome, "skills", "memorax-code")), { code: "ENOENT" });
+  await stat(join(packageRoot, "package.json"));
+  console.log("Cursor npm package smoke: installed Hooks → native SQLite → exact Add; no transcript, deduplication and cleanup passed.");
+} finally {
+  let cleanupError;
+  try { await run(process.execPath, [cli, "stop", ...lifecycleArgs]); }
+  catch (error) { cleanupError = error; }
+  provider.closeAllConnections();
+  await new Promise((accept) => provider.close(accept));
+  await nativeDatabase?.cleanup();
+  if (cleanupError) throw cleanupError;
+  await rm(root, { recursive: true, force: true });
+}
+
+function run(command, args, options = {}) {
+  return new Promise((accept, reject) => {
+    const child = spawn(command, args, { env: options.env ?? env, cwd: workspace, shell: options.shell ?? false, stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => child.kill(), 20_000);
+    child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+    child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+    child.on("error", (error) => { clearTimeout(timeout); reject(error); });
+    child.on("close", (code) => {
+      clearTimeout(timeout);
+      if (code === 0) accept(stdout);
+      else reject(new Error("Cursor package fixture command failed (" + code + "): " + stdout + stderr));
+    });
+    child.stdin.end(options.input ?? "");
+  });
+}

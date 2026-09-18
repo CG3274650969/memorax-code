@@ -69,7 +69,7 @@ test("Trae adapter ships the canonical MemoraX skill and Hook runtime", () => {
 });
 
 test("runtime package accepts the User Profile launcher and rejects Python artifacts", () => {
-  for (const adapter of ["codex", "claude", "dsh", "opencode", "codebuddy", "trae"]) {
+  for (const adapter of ["codex", "claude", "dsh", "opencode", "codebuddy", "trae", "cursor"]) {
     const scripts = `lib/memorax-code-${adapter}-adapter/skills/memorax-code/scripts`;
     assert.equal(isAllowedNpmPackFilePath(`${scripts}/user-profile-memory.mjs`), true);
     for (const suffix of ["py", "pyc", "pyo"]) {

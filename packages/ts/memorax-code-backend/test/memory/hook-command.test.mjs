@@ -9,6 +9,25 @@ import { contentTurnId, memoryHookCommands } from "../support/memory-hook-comman
 
 const INVALID = { ok: false, error: "invalid memory Hook command" };
 const invalidFields = {
+  cursor: {
+    start: [
+      ["missing database authority", { databasePath: undefined }],
+      ["relative database path", { databasePath: "state.vscdb" }],
+      ["missing generation", { turnId: undefined }],
+      ["invalid conversation", { sessionId: "not-a-conversation" }],
+      ["missing workspace", { cwd: undefined }],
+      ["absent prompt observation", { prompt: undefined }],
+      ["foreign prompt identity", { promptId: "claude-prompt" }],
+    ],
+    writeback: [
+      ["missing database authority", { databasePath: undefined }],
+      ["native response fallback forbidden", { lastAssistantMessage: "Hook text" }],
+      ["stop cannot carry response digest", { responseDigest: "a".repeat(64) }],
+      ["unknown completion status", { status: "success" }],
+      ["non-string status", { status: ["completed"] }],
+      ["missing generation", { turnId: undefined }],
+    ],
+  },
   codex: {
     start: [
       ["unknown field", { unexpected: true }],
@@ -106,4 +125,22 @@ test("Trae reminder commands preserve Hook correlation without foreign transcrip
   const command = { ...identity, content: "Use the memorax-code skill.", triggers: ["cadence"] };
   assert.deepEqual(parseSkillReminderCommand(command), { ok: true, command });
   assert.deepEqual(parseSkillReminderCommand({ ...command, transcriptPath: "/tmp/trae.jsonl" }), INVALID);
+});
+
+test("Cursor response digests and empty continuation prompts retain exact native identity", () => {
+  const { start } = memoryHookCommands().find(({ start }) => start.client === "cursor");
+  const { prompt, ...identity } = start;
+  const response = { ...identity, phase: "response", responseDigest: "a".repeat(64) };
+  assert.deepEqual(parseWritebackCommand(response), { ok: true, command: response });
+  for (const fields of [{ status: "completed" }, { responseDigest: "A".repeat(64) }, { responseDigest: "short" }]) {
+    assert.deepEqual(parseWritebackCommand({ ...response, ...fields }), INVALID);
+  }
+  const continuation = { ...start, prompt: "" };
+  assert.deepEqual(parseTurnStartCommand(continuation), { ok: true, command: continuation });
+  const { transcriptPath, ...firstPrompt } = start;
+  assert.deepEqual(parseTurnStartCommand(firstPrompt), { ok: true, command: firstPrompt });
+  const reminder = { ...identity, content: "Use the memorax-code skill.", triggers: ["cadence"] };
+  delete reminder.transcriptPath;
+  delete reminder.databasePath;
+  assert.deepEqual(parseSkillReminderCommand(reminder), { ok: true, command: reminder });
 });

@@ -14,9 +14,10 @@ export type TraceContextOrigin =
   | "codebuddy-hook-body"
   | "workbuddy-hook-body"
   | "trae-hook-body"
+  | "cursor-hook-body"
   | "current-turn-file"
   | "manual";
-export type TraceClient = "codex" | "claude" | "dsh" | "opencode" | "codebuddy" | "workbuddy" | "trae";
+export type TraceClient = "codex" | "claude" | "dsh" | "opencode" | "codebuddy" | "workbuddy" | "trae" | "cursor";
 
 export type TraceRelatedTurn = Readonly<{
   turnId?: string;
@@ -164,6 +165,24 @@ export function traceContextFromDshTurnStart(
   return traceContextFromDshBody(body, "dsh-cordis-turn-start", capturedAt);
 }
 
+export function traceContextFromCursorHookBody(
+  body: unknown,
+  capturedAt = new Date().toISOString(),
+): TraceContext | undefined {
+  if (!isRecord(body) || (body.client !== undefined && body.client !== "cursor")) return undefined;
+  const sessionId = stringField(body, "sessionId") ?? stringField(body, "conversation_id");
+  const turnId = stringField(body, "turnId") ?? stringField(body, "generation_id");
+  if (!sessionId || !turnId) return undefined;
+  const cwd = stringField(body, "cwd");
+  return pruneTraceContext({
+    schemaVersion: "1", client: "cursor", sessionId, turnId,
+    transcriptPath: stringField(body, "transcriptPath") ?? stringField(body, "transcript_path"),
+    cwd, memoryProject: resolveMemoryProject(cwd),
+    workspaceKind: stringField(body, "workspaceKind"),
+    contextOrigin: "cursor-hook-body", capturedAt,
+  });
+}
+
 export function traceContextFromDshSkillReminder(
   body: unknown,
   capturedAt = new Date().toISOString(),
@@ -244,7 +263,8 @@ export function isTraceClient(value: unknown): value is TraceClient {
     || value === "opencode"
     || value === "codebuddy"
     || value === "workbuddy"
-    || value === "trae";
+    || value === "trae"
+    || value === "cursor";
 }
 
 function traceContextFromDshBody(

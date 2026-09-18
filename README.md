@@ -41,7 +41,7 @@ starts without the architecture, failed attempts, repository rules, or working
 preferences established before it.
 
 MemoraX Code gives Codex, Claude Code, CodeBuddy CLI, WorkBuddy, DeepSeek Harness,
-OpenCode, and Trae a shared memory layer for that context.
+OpenCode, Trae, and Cursor a shared memory layer for that context.
 It can recall prior engineering knowledge, capture reusable lessons from
 completed work, maintain repository knowledge, and carry your procedures and
 preferences into future sessions.
@@ -53,7 +53,7 @@ and validation sooner.
 ## Quick Start
 
 Prepare Node.js 20+ (Node.js 24 LTS recommended) and at least one of Codex,
-Claude Code, CodeBuddy CLI, WorkBuddy, DeepSeek Harness, OpenCode, or Trae.
+Claude Code, CodeBuddy CLI, WorkBuddy, DeepSeek Harness, OpenCode, Trae, or Cursor.
 
 For DeepSeek Harness (DSH), current releases require Node.js
 `^22.19.0 || >=24.0.0`. Install or initialize DSH first, create at least one
@@ -156,6 +156,19 @@ refresh every detected coding agent after setup.
 | DeepSeek Harness | Restart or refresh DSH to load the plugin registered in existing Profiles. |
 | OpenCode | Restart or refresh the client to discover the managed plugin and Skill. |
 | Trae | In **Settings → Hooks → Global → Configured Hooks**, enable the registered Global Hooks once. Setup installs the Hooks and Skill; this switch requires manual activation. |
+| Cursor | Restart or refresh Cursor, then open a new conversation to load its native user Hooks and shared Skill. |
+
+Cursor installs independently of Claude Code under `~/.cursor/hooks.json` and
+`~/.cursor/skills/memorax-code/`; setup preserves its third-party integration
+setting. Use the Skill for CLI Search and manual Add. Automatic Add reads verified
+native database turns and requires Node.js 22.13+
+with built-in SQLite (Node.js 24 recommended). It supports ordinary prompts,
+edited resends, and continuations bound to an observed preceding turn; interrupted
+or ambiguously correlated content is skipped. Prompt Hooks inject trusted User
+Profile preferences on the first eligible turn and Procedure Memory on the
+configured reminder cadence. Post-compaction restoration and automatic prompt
+retrieval are not enabled in this integration. See
+[Cursor configuration](docs/configuration.md#cursor-integration-paths).
 
 Open a project, start a new client session, and send one prompt. Then run
 these commands from the project directory:
@@ -194,7 +207,7 @@ to bootstrap setup or repair a stale terminal environment.
 ### Try Cross-Session Memory
 
 Clone the example repository from the product website, then open Codex, Claude
-Code, CodeBuddy CLI, WorkBuddy, DeepSeek Harness, OpenCode, or Trae in the project directory:
+Code, CodeBuddy CLI, WorkBuddy, DeepSeek Harness, OpenCode, Trae, or Cursor in the project directory:
 
 ```bash
 git clone https://github.com/SWE-agent/test-repo.git
@@ -202,7 +215,7 @@ cd test-repo
 ```
 
 Invoke the Skill as `$memorax-code` in Codex or `/memorax-code` in Claude Code
-or DeepSeek Harness. In OpenCode, CodeBuddy CLI, WorkBuddy, or Trae, ask the agent
+or DeepSeek Harness. In OpenCode, CodeBuddy CLI, WorkBuddy, Trae, or Cursor, ask the agent
 to use the `memorax-code` skill by name. The prompts below use its product name
 and work in all supported clients.
 
@@ -256,10 +269,10 @@ writing when the durable intent or target is unclear.
 | **Background memory writeback** | Extracts reusable knowledge from completed turns and writes it to Coding Memory in the background. |
 | **Preference continuity** | Records User Profile preferences and injects them into future tasks on a configured cadence. |
 | **Procedure reuse** | Records reusable task procedures and reminds future agents to apply them. |
-| **Visible memory impact** | In Codex, Claude Code, CodeBuddy CLI, WorkBuddy, DeepSeek Harness, OpenCode, and Trae, opens the final answer with a brief natural-language note when an explicit Coding Memory Search or a Repo, Procedure, or Profile Memory available to the current turn materially guided the task. |
-| **Background Repo Memory maintenance** | Automatically organizes repository structure, entry points, and history evidence in supported headless-capable clients, then updates them according to policy to reduce repeated searching and summarization. Trae can use the Skill for Repo Memory, but does not currently expose a headless worker for automatic maintenance. |
+| **Visible memory impact** | In Codex, Claude Code, CodeBuddy CLI, WorkBuddy, DeepSeek Harness, OpenCode, Trae, and Cursor, opens the final answer with a brief natural-language note when an explicit Coding Memory Search or a Repo, Procedure, or Profile Memory available to the current turn materially guided the task. |
+| **Background Repo Memory maintenance** | Automatically organizes repository structure, entry points, and history evidence in supported headless-capable clients, then updates them according to policy to reduce repeated searching and summarization. Trae and Cursor can use the Skill for Repo Memory; their integrations do not run automatic background maintenance. |
 | **Active memory control** | Lets you search and add memory through the bundled MemoraX Code skill or the CLI. |
-| **Client integration** | Integrates with Codex, Claude Code, CodeBuddy CLI, WorkBuddy, DeepSeek Harness, OpenCode, and Trae to trigger memory retrieval, reminders, and writeback. Automatic quota reminders are currently available in Codex, Claude Code, CodeBuddy CLI, WorkBuddy, OpenCode, and Trae. |
+| **Client integration** | Integrates with Codex, Claude Code, CodeBuddy CLI, WorkBuddy, DeepSeek Harness, OpenCode, Trae, and Cursor to trigger memory retrieval, reminders, and writeback. Automatic quota reminders are currently available in Codex, Claude Code, CodeBuddy CLI, WorkBuddy, OpenCode, and Trae. |
 | **Local observability** | Uses content-controlled local trace and reconciliation records to inspect activity counts, retrieval, and writeback status. |
 
 ## Your Memory, Your Control

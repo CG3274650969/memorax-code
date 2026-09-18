@@ -1,4 +1,4 @@
-.PHONY: test test-ts test-adapter-common test-shared-skill test-codex-adapter test-claude-adapter test-dsh-adapter test-dsh-e2e test-opencode-adapter test-opencode-e2e test-codebuddy-adapter test-trae-adapter test-npm-package docs-check npm-package-build npm-package-check npm-publish-dry-run release-version-check clean
+.PHONY: test test-ts test-adapter-common test-shared-skill test-codex-adapter test-claude-adapter test-dsh-adapter test-dsh-e2e test-opencode-adapter test-opencode-e2e test-codebuddy-adapter test-trae-adapter test-cursor-adapter test-npm-package docs-check npm-package-build npm-package-check npm-publish-dry-run release-version-check clean
 
 NPM ?= npm
 
@@ -16,6 +16,7 @@ test-ts:
 	$(MAKE) test-opencode-adapter
 	$(MAKE) test-codebuddy-adapter
 	$(MAKE) test-trae-adapter
+	$(MAKE) test-cursor-adapter
 
 test-adapter-common:
 	node --test "packages/ts/memorax-code-adapter-common/test/**/*.test.mjs"
@@ -43,6 +44,9 @@ test-codebuddy-adapter:
 
 test-trae-adapter:
 	$(NPM) test --prefix packages/ts/memorax-code-trae-adapter
+
+test-cursor-adapter:
+	$(NPM) test --prefix packages/ts/memorax-code-cursor-adapter
 
 test-opencode-e2e:
 	$(NPM) ci --prefix packages/ts/memorax-code-backend

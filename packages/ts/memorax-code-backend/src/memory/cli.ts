@@ -487,6 +487,7 @@ function traceClientLabel(client: TraceClient | undefined): string {
   if (client === "opencode") return "OpenCode";
   if (client === "codebuddy") return "CodeBuddy CLI";
   if (client === "workbuddy") return "WorkBuddy";
+  if (client === "cursor") return "Cursor";
   return client === "codex" ? "Codex" : "coding agent";
 }
 

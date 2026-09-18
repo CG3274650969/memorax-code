@@ -10,6 +10,7 @@ import { runMemoryCli } from "../../dist/memory/cli.js";
 import {
   traceContextFromClaudeHookBody,
   traceContextFromCodeBuddyHookBody,
+  traceContextFromCursorHookBody,
   traceContextFromDshTurnStart,
   traceContextFromHookBody,
   traceContextFromOpenCodeHookBody,
@@ -972,6 +973,7 @@ test("memory CLI keeps same-ID client bindings separate from an inherited Codex 
     { client: "workbuddy", workspace: join(root, "WorkBuddy"), turnId: "workbuddy-turn", paths: (home) => clientTracePaths("workbuddy", home) },
     { client: "codex", workspace: join(root, "new-chat"), turnId: "codex-turn", paths: tracePaths },
     { client: "codebuddy", workspace: join(root, "cli-workspace"), turnId: "codebuddy-turn", paths: codeBuddyTracePaths },
+    { client: "cursor", workspace: join(root, "cursor-workspace"), turnId: "cursor-turn", paths: (home) => clientTracePaths("cursor", home) },
   ];
   for (const { workspace } of clients) await mkdir(join(workspace, "work"), { recursive: true });
   await writeCurrentCodexTurn(traceContextFromHookBody({
@@ -995,6 +997,11 @@ test("memory CLI keeps same-ID client bindings separate from an inherited Codex 
     cwd: clients[0].workspace,
     workspaceKind: "projectless",
   }), { client: "opencode", memoraxCodeHome: root });
+  await writeCurrentTraceTurn(traceContextFromCursorHookBody({
+    sessionId,
+    turnId: "cursor-turn",
+    cwd: clients[4].workspace,
+  }), { client: "cursor", memoraxCodeHome: root });
   const requests = [];
   const fetchImpl = async (_url, init) => {
     requests.push(JSON.parse(init.body));
@@ -1023,9 +1030,9 @@ test("memory CLI keeps same-ID client bindings separate from an inherited Codex 
     };
     const result = await runMemoryCli(["search", "--query", "shared general preference"], options);
     assert.equal(result.ok, true, client);
-    assert.equal(result.scopeKind, client === "codebuddy" ? "local-directory" : "general", client);
+    assert.equal(result.scopeKind, ["codebuddy", "cursor"].includes(client) ? "local-directory" : "general", client);
     assert.equal(requests.length, index + 1);
-    assert.equal(requests[index].user_id, client === "codebuddy" ? "user-1@cli-workspace" : "user-1@General", client);
+    assert.equal(requests[index].user_id, client === "cursor" ? "user-1@cursor-workspace" : client === "codebuddy" ? "user-1@cli-workspace" : "user-1@General", client);
     const events = (await readFile(paths(root).eventsJsonl(sessionId), "utf8"))
       .trim()
       .split("\n")

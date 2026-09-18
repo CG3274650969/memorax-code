@@ -1,7 +1,7 @@
 # Security Policy
 
 MemoraX Code is a local-first integration for Codex, Claude Code,
-CodeBuddy/WorkBuddy, DeepSeek Harness (DSH), OpenCode, and Trae with an optional
+CodeBuddy/WorkBuddy, DeepSeek Harness (DSH), OpenCode, Trae, and Cursor with an optional
 external bind mode and required communication with MemoraX for cloud-backed memory. Security reports should
 distinguish the local Backend, client-owned provider traffic, and MemoraX
 memory traffic.
@@ -29,7 +29,7 @@ Please allow time for triage and remediation before public disclosure.
 
 ### Client and local Backend
 
-- Codex, Claude Code, CodeBuddy/WorkBuddy, DeepSeek Harness, OpenCode, and Trae own provider credentials,
+- Codex, Claude Code, CodeBuddy/WorkBuddy, DeepSeek Harness, OpenCode, Trae, and Cursor own provider credentials,
   models, native tools, and provider traffic. MemoraX Code does not proxy
   model-provider traffic and does not need client provider credentials.
 - The managed Backend binds to loopback by default. External binding requires
@@ -84,6 +84,18 @@ Please allow time for triage and remediation before public disclosure.
 - The managed CodeBuddy/WorkBuddy plugin reads native JSONL transcripts from the
   client-owned project history and sends only normalized turn data required for
   retrieval, trace, or writeback.
+- The Cursor adapter manages only its marked native user Hooks and shared Skill
+  under `CURSOR_HOME` (default `~/.cursor`), independently of Claude Code. It
+  preserves unrelated configuration and Cursor's third-party integration switch.
+  Automatic writeback reads native SQLite conversation state and referenced blobs
+  in a read-only transaction. Exact native request/user identity, prompt digest,
+  completed Hook, and final-response digest authorize the selected text. Continue
+  additionally validates the original user and unchanged native branch/step prefix.
+  Database paths and pending correlation records remain local. No database copy,
+  UI bubble, JSONL fallback, tool text, or thinking content is sent to MemoraX.
+  Ambiguous or unsupported content and interrupted runs do not write back. Hook
+  response text is used only for digest comparison, never as fallback content.
+  Cursor has no automatic prompt retrieval.
 - The managed Trae adapter merges only marker-owned `SessionStart`,
   `UserPromptSubmit`, and `Stop` entries into Trae's `hooks.json`, refuses to
   replace an unmanaged `memorax-code` Skill, and removes only managed assets.
@@ -130,6 +142,7 @@ Repo Memory runners use the following native execution permissions:
 | OpenCode | A dedicated session allows `edit`, `bash`, `webfetch`, `doom_loop`, and `external_directory` for `*` |
 | DSH | Uses the selected managed headless Profile via `--profile`; the adapter supplies no additional permission flag |
 | Trae | No automatic background runner |
+| Cursor | No automatic background runner in this integration |
 
 Run these jobs only against trusted source in an appropriately trusted local
 environment. Worker timeouts and repository validation bound lifecycle and
@@ -180,7 +193,8 @@ Active adds and automatic writeback send the selected content needed to create
 memory. Automatic writeback may include selected user instructions and the
 matching final assistant response from an exact Codex rollout, Claude Code or
 CodeBuddy/WorkBuddy transcript, DSH persisted Session Event Log interval,
-OpenCode SDK session-message Turn, or Trae's validated Hook pair. It does not
+OpenCode SDK session-message Turn, Cursor's correlated native SQLite turn and steps, or
+Trae's validated Hook pair. It does not
 send the retained trace file, raw transcript path, raw DSH interval, SDK
 message records, or trace-only provenance as part of that payload.
 
@@ -268,7 +282,7 @@ modifies diagnostic storage. These files are not signed: review their text befor
 sharing, especially if edited by another local process. Current status and raw
 Backend logs can include additional local information and require separate review.
 
-Codex, Claude Code, CodeBuddy/WorkBuddy, DSH, OpenCode, and Trae local trace capture is enabled by default.
+Codex, Claude Code, CodeBuddy/WorkBuddy, DSH, OpenCode, Trae, and Cursor local trace capture is enabled by default.
 Depending on the enabled client capabilities, traces may include prompts,
 responses, recalled memory, writeback content, reminder text, and local paths.
 Trace files stay under `MEMORAX_CODE_HOME`. The shipped package has no trace

@@ -60,6 +60,8 @@ export type HarnessMemoryDefinition = Readonly<{
   traceFailureEvent: string;
   turnStartTraceSource?: string;
   deduplicateRetrieval: boolean;
+  // Some clients cannot deliver prompt-time Hook context to the model.
+  automaticRetrieval?: boolean;
   quotaNotices?: boolean;
 }>;
 
@@ -201,7 +203,7 @@ export function createHarnessMemoryRuntime(
         now: () => new Date(now()),
       }));
       const repoMemoryWorktree = resolvedRepoMemoryWorktree(repositoryMemory);
-      if (!turn.clientTurnId || (definition.deduplicateRetrieval && !claimRetrievalTurn(retrievalTurns, retrievalTurnLimit, {
+      if (definition.automaticRetrieval === false || !turn.clientTurnId || (definition.deduplicateRetrieval && !claimRetrievalTurn(retrievalTurns, retrievalTurnLimit, {
         sessionId: turn.sessionId,
         clientTurnId: turn.clientTurnId,
       }, retrievalKeySuffix))) {

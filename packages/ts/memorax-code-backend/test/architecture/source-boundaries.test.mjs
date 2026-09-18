@@ -31,6 +31,8 @@ const nativeReaders = [
   "clients/dsh/session-turn.ts",
   "clients/opencode/message-turn.ts",
   "clients/codebuddy/jsonl-history.ts",
+  "clients/cursor/database-snapshot.ts",
+  "clients/cursor/database-turn.ts",
 ];
 const clientMemoryRuntimes = [];
 for (const module of clientModules) {
