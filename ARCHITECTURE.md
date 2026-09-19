@@ -753,6 +753,10 @@ that recover do not produce terminal failure records.
   a completed Stop and a unique final public assistant step matching the response
   digest. Hook text, UI bubbles, JSONL, and latest-turn guesses are not content
   fallbacks. Thinking, tools, unsupported content, and interrupted runs are excluded.
+  Retryable writeback reads stay silent until their bounded deadline; an exhausted
+  read emits one content-free diagnostic while the locked Turn metadata remains
+  recoverable. Cursor records bounded diagnostic keys with its private session
+  state so repeated Hooks and Backend restarts do not duplicate that observation.
   Pending native persistence and local enqueue rejection receive bounded retries
   outside the Hook request; private pending records restore retries after Backend
   restart within the original deadline. Replacement makes one last exact read,

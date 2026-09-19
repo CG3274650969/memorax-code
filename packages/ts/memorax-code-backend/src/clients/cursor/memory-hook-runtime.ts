@@ -7,6 +7,7 @@ import type { MemoryTurnState } from "../../memory/turn-coordinator.js";
 import { traceContextFromCursorHookBody, type TraceContext } from "../../trace/context.js";
 import { markCurrentTraceTurnOutcome, recordTraceEvent, traceTurnEventId } from "../../trace/store.js";
 import { readCursorCompactionSnapshot, readCursorDatabaseSnapshot } from "./database-snapshot.js";
+import { recordCursorFailure, type CursorFailureContext } from "./diagnostics.js";
 import { captureCursorCompaction, consumeCursorCompaction } from "./compaction.js";
 import { captureCursorContinuation, cursorTextDigest, selectCursorDatabaseTurn } from "./database-turn.js";
 import { cursorPendingSessions, retireCursorGeneration, withCursorSessionRecord, type CursorSessionRecord, type CursorStoredTurn } from "./turn-store.js";
@@ -67,6 +68,20 @@ export function createCursorMemoryHookRuntime(
     });
   }
 
+  function reportFailure(operation: CursorFailureContext["operation"], reason: string,
+    command: { sessionId: string; turnId: string }, record?: CursorSessionRecord, save?: () => void,
+    retryExhausted = false, error?: unknown) {
+    // Called under the session lock when durable state is available. Diagnostic
+    // bookkeeping never changes content authority or the original Hook result.
+    const key = cursorTextDigest(JSON.stringify([operation, command.turnId, reason]));
+    if (record?.diagnosticKeys?.includes(key)) return;
+    if (!recordCursorFailure(reason, { memoraxCodeHome: home, env: options.env, operation,
+      ...command, retryExhausted, error }) || !record || !save) return;
+    const previous = record.diagnosticKeys;
+    record.diagnosticKeys = [...(previous ?? []).slice(-63), key];
+    try { save(); } catch { record.diagnosticKeys = previous; }
+  }
+
   async function recordOutcome(command: CursorWritebackCommand, turn: CursorStoredTurn, outcome: "completed" | "interrupted") {
     const traceContext = traceForTurn(command.sessionId, turn);
     try {
@@ -89,16 +104,25 @@ export function createCursorMemoryHookRuntime(
     retries.delete(sessionId);
   }
 
-  function scheduleRetry(sessionId: string, until: number) {
-    if (closed || retries.has(sessionId) || now() >= until) return;
+  function scheduleRetry(sessionId: string, turnId: string, until: number) {
+    if (closed || retries.has(sessionId)) return;
     const timer = setTimeout(() => {
       retries.delete(sessionId);
       void withCursorSessionRecord(stateOptions(sessionId), async (record, save) => {
         const turn = record.active;
-        if (!turn || closed || turn.state !== "open" || turn.stopStatus !== "completed"
-          || !turn.responseDigest || !turn.retryUntil || now() >= turn.retryUntil) return;
+        if (!turn || turn.turnId !== turnId || closed || turn.state !== "open" || turn.stopStatus !== "completed"
+          || !turn.responseDigest || !turn.retryUntil) return;
+        if (now() >= turn.retryUntil) {
+          reportFailure("memory.writeback", turn.reason ?? "native_final_response_pending",
+            { sessionId, turnId }, record, save, true);
+          return;
+        }
         await completePending(sessionId, record, save);
-      }).catch(() => { scheduleRetry(sessionId, until); });
+      }).catch((error) => {
+        if (closed) return;
+        if (now() < until) scheduleRetry(sessionId, turnId, until);
+        else reportFailure("memory.writeback", "turn_state_unavailable", { sessionId, turnId }, undefined, undefined, false, error);
+      });
     }, Math.min(retryDelay, Math.max(1, until - now())));
     timer.unref();
     retries.set(sessionId, timer);
@@ -109,7 +133,11 @@ export function createCursorMemoryHookRuntime(
     const command = { sessionId, turnId: turn.turnId };
     if (closed) return skipped("runtime_closed");
     if (turn.state === "accepted") return skipped("already_accepted_locally");
-    if (turn.state !== "open") return skipped(turn.reason ?? "native_authority_unavailable");
+    if (turn.state !== "open") {
+      const reason = turn.reason ?? "native_authority_unavailable";
+      reportFailure("memory.writeback", reason, command, record, save, true);
+      return skipped(reason);
+    }
     if (turn.stopStatus !== "completed") return skipped("completion_event_missing");
     if (!turn.responseDigest) return skipped("response_digest_missing");
     turn.retryUntil ??= now() + retryWindow;
@@ -122,14 +150,17 @@ export function createCursorMemoryHookRuntime(
     }) : snapshot;
     if (closed) return skipped("runtime_closed");
     if (!native.ok) {
+      turn.reason = native.reason;
+      save();
       if (!native.retryable) {
         turn.state = "blocked";
         turn.reason = native.reason;
         save();
         cancelRetry(sessionId);
-      } else {
-        scheduleRetry(sessionId, turn.retryUntil);
+      } else if (now() < turn.retryUntil) {
+        scheduleRetry(sessionId, turn.turnId, turn.retryUntil);
       }
+      reportFailure("memory.writeback", native.reason, command, record, save, now() >= turn.retryUntil);
       diagnostic(native.reason, command);
       return skipped(native.reason);
     }
@@ -147,7 +178,12 @@ export function createCursorMemoryHookRuntime(
       }),
     });
     if (!completed.scheduled) {
-      scheduleRetry(sessionId, turn.retryUntil);
+      turn.reason = completed.reason;
+      save();
+      if (now() < turn.retryUntil) scheduleRetry(sessionId, turn.turnId, turn.retryUntil);
+      if (completed.reason !== "decision_error" || now() >= turn.retryUntil) {
+        reportFailure("memory.writeback", completed.reason, command, record, save);
+      }
       diagnostic(completed.reason, command);
       return skipped(completed.reason);
     }
@@ -155,6 +191,7 @@ export function createCursorMemoryHookRuntime(
     turn.state = "accepted";
     delete turn.metadata;
     delete turn.retryUntil;
+    delete turn.reason;
     save();
     cancelRetry(sessionId);
     try {
@@ -169,7 +206,7 @@ export function createCursorMemoryHookRuntime(
   }
 
   // Only our private pending records are scanned; never enumerate client chats.
-  for (const pending of cursorPendingSessions(home)) scheduleRetry(pending.sessionId, pending.retryUntil);
+  for (const pending of cursorPendingSessions(home)) scheduleRetry(pending.sessionId, pending.turnId, pending.retryUntil);
 
   return {
     async recordPreCompact(command) {
@@ -178,11 +215,15 @@ export function createCursorMemoryHookRuntime(
       try {
         return await withCursorSessionRecord(stateOptions(command.sessionId), async (record, save) => {
           const active = record.active;
-          if (!active) return skipped("start_missing");
+          if (!active) {
+            reportFailure("memory.pre-compact", "start_missing", command, record, save);
+            return skipped("start_missing");
+          }
           if (active.databasePath !== command.databasePath || active.cwd !== command.cwd
             || active.workspaceKind !== command.workspaceKind) {
             delete record.compaction;
             save();
+            reportFailure("memory.pre-compact", "database_or_workspace_changed", command, record, save);
             return skipped("database_or_workspace_changed");
           }
           const repositoryMemory = await memory.resolveRepositoryMemory({
@@ -194,10 +235,14 @@ export function createCursorMemoryHookRuntime(
             || compactionScopeKey(scope) !== compactionScopeKey(record.repositoryScope)) {
             delete record.compaction;
             save();
+            if (!repositoryMemory.ok) reportFailure("memory.pre-compact", repositoryMemory.reason, command, record, save);
             return skipped("workspace_scope_unavailable");
           }
           const native = await readCursorCompactionSnapshot(command);
-          if (!native.ok) return skipped(native.reason);
+          if (!native.ok) {
+            reportFailure("memory.pre-compact", native.reason, command, record, save);
+            return skipped(native.reason);
+          }
           if (!native.snapshot.rootMessageIds.length) return skipped("compaction_roots_missing");
           record.compaction = captureCursorCompaction(record.compaction, {
             databasePath: command.databasePath, cwd: command.cwd, scopeKey: compactionScopeKey(scope),
@@ -207,7 +252,10 @@ export function createCursorMemoryHookRuntime(
           save();
           return { ok: true, recorded: true };
         });
-      } catch { return skipped("turn_state_unavailable"); }
+      } catch (error) {
+        reportFailure("memory.pre-compact", "turn_state_unavailable", command, undefined, undefined, false, error);
+        return skipped("turn_state_unavailable");
+      }
     },
 
     async recordTurnStart(command) {
@@ -310,13 +358,20 @@ export function createCursorMemoryHookRuntime(
                   databasePath: command.databasePath, cwd: command.cwd, scopeKey,
                 }, native.snapshot);
                 save();
+              } else {
+                reportFailure("memory.pre-compact", native.reason, command, record, save);
               }
             }
           }
-          if (reason) diagnostic(reason, command);
+          if (reason) {
+            reportFailure("memory.turn-start", reason, command, record, save, true);
+            diagnostic(reason, command);
+          }
+          if (!repositoryMemory.ok) reportFailure("memory.turn-start", repositoryMemory.reason, command, record, save);
           return { ...result, recorded: true, ...(restorePersonalMemory ? { restorePersonalMemory: true } : {}) };
         });
-      } catch {
+      } catch (error) {
+        reportFailure("memory.turn-start", "turn_state_unavailable", command, undefined, undefined, false, error);
         diagnostic("turn_state_unavailable", command);
         // Retrying outside the lock could publish stale CLI identity after a
         // newer generation. Unavailable durable authority cannot register here.
@@ -329,7 +384,10 @@ export function createCursorMemoryHookRuntime(
       try {
         return await withCursorSessionRecord(stateOptions(command.sessionId), async (record, save) => {
           const turn = record.active;
-          if (!turn) return skipped("start_missing");
+          if (!turn) {
+            reportFailure("memory.writeback", "start_missing", command, record, save);
+            return skipped("start_missing");
+          }
           if (turn.turnId !== command.turnId) return skipped("generation_replaced");
           if (turn.state === "accepted") return skipped("already_accepted_locally");
           if (turn.state === "interrupted") return skipped("interrupted");
@@ -338,6 +396,7 @@ export function createCursorMemoryHookRuntime(
             turn.reason = reason;
             save();
             cancelRetry(command.sessionId);
+            reportFailure("memory.writeback", reason, command, record, save);
             diagnostic(reason, command);
             return skipped(reason);
           };
@@ -374,7 +433,8 @@ export function createCursorMemoryHookRuntime(
           save();
           return await completePending(command.sessionId, record, save);
         });
-      } catch {
+      } catch (error) {
+        reportFailure("memory.writeback", "turn_state_unavailable", command, undefined, undefined, false, error);
         diagnostic("turn_state_unavailable", command);
         return skipped("turn_state_unavailable");
       }

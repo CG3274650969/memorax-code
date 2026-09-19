@@ -735,15 +735,26 @@ Automatic Add requires native database content matching the observed generation,
 original user, and final-response digest, plus a completed Stop. Missing content
 is retried for up to 30 seconds, including after a Backend restart within that
 deadline. A missing initial transcript path no longer blocks automatic Add.
+While this retry is active, pending database reads do not create failure records.
+If the deadline expires, `memorax-code logs --diagnostics` shows one
+`CURSOR_NATIVE_CONTENT_TIMEOUT` record and the private pending Turn state is
+retained. If the exact native Turn is saved later, a matching completion Hook
+or the final exact read before the next prompt replaces it can still enqueue
+it. Restarting the Backend does not extend the deadline; the timeout record
+describes the expired retry window.
 
 `native_generation_pending`, `native_turn_pending`, and
 `native_final_response_pending` indicate that matching content is not yet visible.
 `continuation_user_unbound` means Continue lacks an observed terminal predecessor;
 `native_continuation_replaced` and `native_continuation_prefix_changed` indicate
-that the captured native binding changed. Unsupported content, prompt mismatch,
-ambiguous final answers, cancellation, or error are not reconstructed from Hook
-text, UI bubbles, or JSONL. Start an ordinary prompt to establish fresh authority,
-or explicitly save a selected lesson through the Skill. See
+that the captured native binding changed. Non-retryable native database,
+correlation, and format failures are saved as content-free Cursor diagnostics;
+saved session diagnostic keys suppress repeated reports across Hooks and Backend
+restarts. Simulated, steer, external, or empty user messages and interrupted
+Turns remain normal skips. No rejected content is reconstructed from Hook text,
+UI bubbles, or JSONL.
+Start an ordinary prompt to establish fresh authority, or explicitly save a
+selected lesson through the Skill. See
 [Cursor configuration](configuration.md#cursor-integration-paths).
 
 ## Trae Global Hooks or Skill is inactive

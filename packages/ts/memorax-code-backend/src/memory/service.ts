@@ -183,7 +183,8 @@ export function createMemoryService(options: MemoryServiceOptions = {}): MemoryS
         case "trae":
           return await observeWriteback(command, traeHook.writeback(command));
         case "cursor":
-          return await observeWriteback(command, cursorHook.writeback(command));
+          // Cursor owns failure reporting, including retries after this request ends.
+          return await cursorHook.writeback(command);
       }
       return unsupportedMemoryHookCommand(command);
     },

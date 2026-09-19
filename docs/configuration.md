@@ -905,10 +905,24 @@ records known failures after a valid command reaches its native-content or
 writeback handling. Automatic Add records a terminal failure after the existing
 retry policy finishes, rather than recording every retry. Disabled writeback,
 normal buffering, duplicate handling, interruption, and empty eligible content
-do not create failure records. There is no persistent cross-process failure
-deduplication state. Records describe observed failures; their absence does not
-prove that a Hook ran or that MemoraX accepted a turn. See
+do not create failure records. Cursor keeps bounded diagnostic keys in its
+private session state to suppress repeated reports for the same operation, Turn,
+and reason across Hooks and Backend restarts. This is best-effort when local
+storage is unavailable and does not alter writeback authority or consume pending
+content. Other clients do not persist deduplication keys. Records describe
+observed failures; their absence does not prove that a Hook ran or that MemoraX
+accepted a turn. See
 [background failure recovery](troubleshooting.md#hook-ran-but-automatic-writeback-is-missing).
+
+Cursor automatic-writeback database reads are quiet while matching content is
+still being persisted. If the bounded retry window ends without an exact native
+match, the Backend writes one `CURSOR_NATIVE_CONTENT_TIMEOUT` record and retains the
+pending Turn metadata. A later matching completion Hook, or the final exact read
+before a new prompt replaces that Turn, can still enqueue it if the exact native
+content becomes available. A Backend restart alone does not extend the retry
+deadline. Non-retryable database, correlation, native-format, or workspace
+failures are recorded when observed. Compaction reads have no background retry;
+their unavailable baseline or restoration reads are recorded at the failed Hook.
 
 ## Backend lifecycle diagnostics
 

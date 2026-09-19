@@ -38,6 +38,7 @@ export type CursorSessionRecord = {
   compaction?: CursorCompactionState;
   // Never recycle generation identities after completion or replacement.
   retiredTurnIds: string[];
+  diagnosticKeys?: string[];
   active?: CursorStoredTurn;
 };
 
@@ -80,11 +81,13 @@ export function retireCursorGeneration(record: CursorSessionRecord): void {
 }
 
 function validRecord(value: unknown, sessionId: string): value is CursorSessionRecord {
-  if (!isRecord(value) || !keys(value, ["version", "client", "sessionId", "repositoryScope", "compaction", "retiredTurnIds", "active"])
+  if (!isRecord(value) || !keys(value, ["version", "client", "sessionId", "repositoryScope", "compaction", "retiredTurnIds", "diagnosticKeys", "active"])
     || value.version !== 2 || value.client !== "cursor" || value.sessionId !== sessionId
     || !Array.isArray(value.retiredTurnIds) || value.retiredTurnIds.length > MAX_RETIRED_TURNS
     || !value.retiredTurnIds.every((id) => typeof id === "string" && UUID.test(id))
     || new Set(value.retiredTurnIds).size !== value.retiredTurnIds.length
+    || (value.diagnosticKeys !== undefined && (!Array.isArray(value.diagnosticKeys)
+      || value.diagnosticKeys.length > 64 || !value.diagnosticKeys.every(digest)))
     || (value.repositoryScope !== undefined && !validScope(value.repositoryScope))
     || (value.compaction !== undefined && !validCursorCompactionState(value.compaction))) return false;
   return value.active === undefined || (validTurn(value.active) && !value.retiredTurnIds.includes(value.active.turnId));
@@ -129,7 +132,7 @@ function validBaseline(value: unknown): value is CursorContinuationBaseline {
       && digest(step.id) && digest(step.contentHash));
 }
 
-export function cursorPendingSessions(home: string): { sessionId: string; retryUntil: number }[] {
+export function cursorPendingSessions(home: string): { sessionId: string; turnId: string; retryUntil: number }[] {
   try {
     return readdirSync(join(home, "runtime", "cursor", "turns")).slice(0, 8192).flatMap((name) => {
       if (!/^[0-9a-f]{64}\.json$/.test(name)) return [];
@@ -143,7 +146,7 @@ export function cursorPendingSessions(home: string): { sessionId: string; retryU
           || cursorTurnStatePath(home, stored.value.sessionId) !== path) return [];
         const turn = stored.value.active;
         return turn?.state === "open" && turn.stopStatus === "completed"
-          && turn.responseDigest && turn.retryUntil ? [{ sessionId: stored.value.sessionId, retryUntil: turn.retryUntil }] : [];
+          && turn.responseDigest && turn.retryUntil ? [{ sessionId: stored.value.sessionId, turnId: turn.turnId, retryUntil: turn.retryUntil }] : [];
       } catch { return []; }
     });
   } catch { return []; }

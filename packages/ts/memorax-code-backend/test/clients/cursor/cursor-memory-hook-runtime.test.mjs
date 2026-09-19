@@ -8,6 +8,8 @@ import { createCursorMemoryHookRuntime } from "../../../dist/clients/cursor/memo
 import { cursorTextDigest } from "../../../dist/clients/cursor/database-turn.js";
 import { cursorTurnStatePath } from "../../../dist/clients/cursor/turn-store.js";
 import { createRepositoryMemorySessionRuntime } from "../../../dist/memory/repository-session.js";
+import { readDiagnosticHistory } from "../../../dist/lifecycle/diagnostic-history.js";
+import { createMemoryService } from "../../../dist/memory/service.js";
 import { readCurrentTraceTurn } from "../../../dist/trace/store.js";
 import { withJsonFileLockAsync } from "../../../../memorax-code-adapter-common/src/config-utils.mjs";
 import { databaseFixture, nativeField, nativeMessage } from "./support/database-fixtures.mjs";
@@ -579,4 +581,140 @@ test("Cursor changed user binding discards armed compaction before the next prom
     assert.equal((await instance.recordTurnStart(f.next())).restorePersonalMemory, undefined);
     assert.equal((await readState(f)).compaction, undefined);
   } finally { instance.close(); await f.cleanup(); }
+});
+
+function failures(f) {
+  const history = readDiagnosticHistory(f.home, { limit: 100 });
+  assert.equal(history.ok, true);
+  assert.equal(history.skipped, 0);
+  return history.records;
+}
+
+test("Cursor persists native failures without trace or Debug, once across repeated Hooks and restart", async () => {
+  const f = await fixture(); let current = runtime(f);
+  try {
+    await current.instance.recordTurnStart(f.start);
+    f.write({ latestGenerationId: f.start.turnId, turns: [{ ...f.native(), userPrompt: "A different private prompt" }] });
+    await observeResponse(current.instance, f.start);
+    assert.equal((await current.instance.writeback(stop(f.start))).reason, "native_prompt_mismatch");
+    await current.instance.writeback(stop(f.start));
+    current.instance.close(); current = runtime(f);
+    await current.instance.writeback(stop(f.start));
+    const records = failures(f);
+    assert.equal(records.length, 1);
+    const record = records[0];
+    assert.equal(record.errorCode, "CURSOR_NATIVE_PROMPT_MISMATCH");
+    assert.equal(record.operation, "memory.writeback");
+    assert.equal(record.stage, "correlation");
+    assert.equal(record.client, "cursor");
+    assert.ok(record.impact && record.userAction);
+    assert.equal(record.sessionHash, cursorTextDigest(f.sessionId).slice(0, 24));
+    for (const privateText of [prompt, answer, f.root, f.sessionId, f.start.turnId, "synthetic-secret", "A different private prompt"]) {
+      assert.equal(JSON.stringify(records).includes(privateText), false);
+    }
+    assert.ok((await readState(f)).active.metadata);
+    assert.equal(current.writes.length, 0);
+  } finally { current.instance.close(); await f.cleanup(); }
+});
+
+test("Cursor reports native content timeout only after retries expire and preserves late exact recovery", async () => {
+  const f = await fixture(); let clock = Date.now();
+  const options = { now: () => clock, databaseRetryWindowMs: 80, databaseRetryDelayMs: 10 };
+  let current = runtime(f, options);
+  try {
+    await current.instance.recordTurnStart(f.start); await observeResponse(current.instance, f.start);
+    assert.equal((await current.instance.writeback(stop(f.start))).reason, "database_session_missing");
+    assert.deepEqual(failures(f), []);
+    clock += 80;
+    await until(() => failures(f).length === 1);
+    const record = failures(f)[0];
+    assert.equal(record.errorCode, "CURSOR_NATIVE_CONTENT_TIMEOUT");
+    assert.equal(record.failureReason, "database_session_missing");
+    const state = await readState(f);
+    assert.equal(state.active.state, "open"); assert.ok(state.active.metadata);
+    current.instance.close(); current = runtime(f, options);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(failures(f).length, 1);
+    await f.append();
+    assert.equal((await current.instance.writeback(stop(f.start))).scheduled, true);
+    assert.equal(current.writes.length, 1);
+  } finally { current.instance.close(); await f.cleanup(); }
+});
+
+test("Cursor pending reads that recover and normal skips produce no failure records", async () => {
+  const f = await fixture(); const { instance, writes } = runtime(f);
+  try {
+    await instance.recordTurnStart(f.start); await observeResponse(instance, f.start);
+    await instance.writeback(stop(f.start));
+    assert.deepEqual(failures(f), []);
+    await f.append(); await until(() => writes.length === 1);
+    await instance.writeback(stop(f.start));
+    await instance.recordTurnStart(f.start);
+    const next = { ...f.start, turnId: randomUUID() };
+    await instance.recordTurnStart(next);
+    await instance.writeback(stop(f.start));
+    await instance.writeback(stop(next, "aborted"));
+    assert.deepEqual(failures(f), []);
+  } finally { instance.close(); await f.cleanup(); }
+});
+
+test("Cursor records a failure discovered by a background DB retry, without a second Hook", async () => {
+  const f = await fixture(); const { instance } = runtime(f);
+  try {
+    await instance.recordTurnStart(f.start); await observeResponse(instance, f.start);
+    await instance.writeback(stop(f.start));
+    f.write({ latestGenerationId: f.start.turnId, turns: [{ ...f.native(), userPrompt: "Different" }] });
+    await until(() => failures(f).length === 1);
+    assert.equal(failures(f)[0].failureReason, "native_prompt_mismatch");
+    await instance.writeback(stop(f.start));
+    assert.equal(failures(f).length, 1);
+  } finally { instance.close(); await f.cleanup(); }
+});
+
+test("Cursor state failures are diagnosed at all three operations without changing their results", async (t) => {
+  for (const operation of ["turn-start", "pre-compact", "writeback"]) await t.test(operation, async () => {
+    const f = await fixture(); const { instance } = runtime(f);
+    try {
+      await mkdir(join(f.home, "runtime", "cursor"), { recursive: true });
+      await writeFile(join(f.home, "runtime", "cursor", "turns"), "private invalid state");
+      const result = operation === "turn-start" ? await instance.recordTurnStart(f.start)
+        : operation === "pre-compact" ? await instance.recordPreCompact(stop(f.start))
+        : await instance.writeback(stop(f.start));
+      assert.equal(result.ok, true);
+      assert.equal(result.recorded ?? result.scheduled, false);
+      assert.equal(failures(f).length, 1);
+      assert.equal(failures(f)[0].operation, "memory." + operation);
+      assert.equal(failures(f)[0].failureReason, "turn_state_unavailable");
+      assert.equal(JSON.stringify(failures(f)).includes("private invalid state"), false);
+    } finally { instance.close(); await f.cleanup(); }
+  });
+});
+
+test("Cursor diagnostics storage failure never changes a native rejection or enqueue acceptance", async () => {
+  const f = await fixture(); const { instance, writes } = runtime(f);
+  try {
+    await instance.recordTurnStart(f.start); await observeResponse(instance, f.start);
+    await writeFile(join(f.home, "runtime", "diagnostics"), "occupied");
+    f.write({ latestGenerationId: f.start.turnId, turns: [{ ...f.native(), userPrompt: "Different" }] });
+    assert.equal((await instance.writeback(stop(f.start))).reason, "native_prompt_mismatch");
+    const next = { ...f.start, turnId: randomUUID() };
+    await instance.recordTurnStart(next); await observeResponse(instance, next);
+    f.write({ latestGenerationId: next.turnId, turns: [f.native(next)] });
+    assert.equal((await instance.writeback(stop(next))).scheduled, true);
+    assert.equal(writes.length, 1);
+    assert.equal(await readFile(join(f.home, "runtime", "diagnostics"), "utf8"), "occupied");
+  } finally { instance.close(); await f.cleanup(); }
+});
+
+test("Cursor service does not duplicate runtime diagnostics for shared scope failures", async () => {
+  const f = await fixture(); const service = createMemoryService({ env: f.env, memoraxCodeHome: f.home,
+    fetchImpl: async () => { throw new Error("Unexpected network"); } });
+  try {
+    await service.recordTurnStart(f.start); await service.writebackTurn(response(f.start)); await f.append();
+    f.env.MEMORAX_CODE_MEMORAX_USER_ID = "changed-user";
+    assert.equal((await service.writebackTurn(stop(f.start))).reason, "workspace_scope_mismatch");
+    await service.writebackTurn(stop(f.start));
+    assert.equal(failures(f).length, 1);
+    assert.equal(failures(f)[0].errorCode, "WRITEBACK_WORKSPACE_SCOPE_MISMATCH");
+  } finally { service.close(); await f.cleanup(); }
 });
