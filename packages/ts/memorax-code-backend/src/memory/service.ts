@@ -20,13 +20,14 @@ import {
 } from "../clients/opencode/memory-hook-runtime.js";
 import { createCodeBuddyMemoryHookRuntime, type CodeBuddyMemoryHookWritebackResult } from "../clients/codebuddy/memory-hook-runtime.js";
 import { createTraeMemoryHookRuntime, type TraeMemoryHookWritebackResult } from "../clients/trae/memory-hook-runtime.js";
-import { createCursorMemoryHookRuntime, type CursorMemoryHookWritebackResult } from "../clients/cursor/memory-hook-runtime.js";
+import { createCursorMemoryHookRuntime, type CursorMemoryHookPreCompactResult, type CursorMemoryHookWritebackResult } from "../clients/cursor/memory-hook-runtime.js";
 import { createMemoryTurnCoordinator } from "./turn-coordinator.js";
 import {
   createRepositoryMemorySessionRuntime,
 } from "./repository-session.js";
 import { createPendingQuotaNoticeRuntime } from "./quota-notice.js";
 import type {
+  CursorPreCompactCommand,
   MemoryHookTurnStartResult,
   TurnStartCommand,
   WritebackCommand,
@@ -48,6 +49,7 @@ type MemoryHookWritebackResult =
 
 export type MemoryService = {
   recordTurnStart(command: TurnStartCommand): Promise<MemoryHookTurnStartResult>;
+  recordPreCompact(command: CursorPreCompactCommand): Promise<CursorMemoryHookPreCompactResult>;
   writebackTurn(command: WritebackCommand): Promise<MemoryHookWritebackResult>;
   drain(): Promise<void>;
   close(): void;
@@ -140,6 +142,9 @@ export function createMemoryService(options: MemoryServiceOptions = {}): MemoryS
   }
   let closed = false;
   return {
+    async recordPreCompact(command) {
+      return await cursorHook.recordPreCompact(command);
+    },
     async recordTurnStart(command) {
       switch (command.client) {
         case "codex":

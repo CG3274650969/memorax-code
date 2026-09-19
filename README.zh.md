@@ -144,7 +144,9 @@ Claude Code，setup 会保留 Cursor 的第三方集成开关。Search 和主动
 自动 Add 从原生数据库读取经过验证的轮次，需要带内置 SQLite 的 Node.js 22.13+（推荐 Node.js 24）。
 支持普通提问、编辑重发，以及能绑定到已观测前一轮的 Continue；中断或内容归属不明确时跳过。
 Prompt Hook 会在首个符合条件的轮次注入可信工作区中的 User Profile 偏好，并按配置的提醒周期
-注入 Procedure Memory。当前 Cursor 集成尚未接入压缩后的恢复提醒或自动 Prompt 检索。详见
+注入 Procedure Memory。记录的压缩经原生数据库验证后，会在下一个非空且成功注册的 Prompt
+恢复 Profile 与个人记忆提醒；Procedure 仍遵循原有周期。缺少证据时跳过恢复，不保证在同一个
+持续执行的任务中立即恢复。自动 Prompt 检索仍保持关闭。详见
 [Cursor 配置](docs/configuration.md#cursor-integration-paths)。
 
 打开项目，新建客户端会话并发送一次 Prompt，然后在项目目录中运行：

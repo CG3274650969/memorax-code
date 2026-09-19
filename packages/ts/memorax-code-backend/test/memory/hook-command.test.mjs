@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  parsePreCompactCommand,
   parseSkillReminderCommand,
   parseTurnStartCommand,
   parseWritebackCommand,
@@ -8,6 +9,42 @@ import {
 import { contentTurnId, memoryHookCommands } from "../support/memory-hook-commands.mjs";
 
 const INVALID = { ok: false, error: "invalid memory Hook command" };
+
+test("Cursor pre-compact accepts only native identity and absolute local paths", () => {
+  const { start } = memoryHookCommands().find(({ start }) => start.client === "cursor");
+  const { prompt, ...command } = start;
+  assert.deepEqual(parsePreCompactCommand(command), { ok: true, command });
+  const { transcriptPath, ...withoutTranscript } = command;
+  assert.deepEqual(parsePreCompactCommand(withoutTranscript), { ok: true, command: withoutTranscript });
+  for (const [name, fields] of [
+    ["missing version", { version: undefined }],
+    ["unsupported version", { version: 2 }],
+    ["missing client", { client: undefined }],
+    ["foreign client", { client: "codex" }],
+    ["unknown client", { client: "unknown-client" }],
+    ["missing conversation", { sessionId: undefined }],
+    ["invalid conversation", { sessionId: "session" }],
+    ["missing generation", { turnId: undefined }],
+    ["invalid generation", { turnId: "generation" }],
+    ["missing workspace", { cwd: undefined }],
+    ["relative workspace", { cwd: "workspace" }],
+    ["NUL workspace", { cwd: "/tmp/workspace\0" }],
+    ["missing database", { databasePath: undefined }],
+    ["relative database", { databasePath: "state.vscdb" }],
+    ["NUL database", { databasePath: "/tmp/state.vscdb\0" }],
+    ["relative transcript", { transcriptPath: "transcript.jsonl" }],
+    ["NUL transcript", { transcriptPath: "/tmp/transcript.jsonl\0" }],
+    ["invalid transcript", { transcriptPath: null }],
+    ["prompt is not an observation field", { prompt: "Do not register a turn." }],
+    ["content is not authority", { content: "Not native context." }],
+    ["trigger is not success authority", { trigger: "manual" }],
+    ["workspace classification is not accepted", { workspaceKind: "general" }],
+    ["unknown field", { unexpected: true }],
+  ]) {
+    assert.deepEqual(parsePreCompactCommand({ ...command, ...fields }), INVALID, name);
+  }
+});
+
 const invalidFields = {
   cursor: {
     start: [

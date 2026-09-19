@@ -434,7 +434,7 @@ The Cursor adapter installs native user Hooks and materializes the shared Skill:
 `CURSOR_HOME` overrides the root; lifecycle commands also accept `--cursor-home`.
 Later commands reuse the installed root when neither override is supplied.
 Setup merges one marked command for each of `sessionStart`, `beforeSubmitPrompt`,
-`afterAgentResponse`, and `stop`. It preserves unrelated Hooks, refuses to replace
+`preCompact`, `afterAgentResponse`, and `stop`. It preserves unrelated Hooks, refuses to replace
 an unmanaged `memorax-code` Skill, and does not change Cursor's third-party
 integration setting. This installation is independent of Claude Code. Its private
 ownership record and immutable runtime generations live under
@@ -464,7 +464,7 @@ Database reading requires a Backend Node.js runtime with built-in `node:sqlite`;
 use Node.js 22.13 or later. The module is available without an experimental
 flag from that release ([Node.js SQLite documentation](https://nodejs.org/api/sqlite.html)).
 Older runtimes can still run the shared Skill and explicit memory commands,
-but skip Cursor's database-backed automatic Add.
+but skip Cursor's database-backed automatic Add and compaction restoration.
 
 Restart or refresh Cursor and open a new conversation after setup.
 `memorax-code-cursor status --json` reports `cursorHooks.status` as `unverified`
@@ -485,8 +485,22 @@ reminders and local personal-memory context through native `additional_context`.
 User Profile preferences are included on the first eligible turn; Procedure
 Memory follows the first-turn and configured reminder cadence. Personal contents
 are read only from a Backend-authorized Git worktree. Without that authority, an
-accepted turn can still receive generic reminders. Post-compaction restoration
-is not connected.
+accepted turn can still receive generic reminders.
+
+For compaction, `preCompact` only records a native database baseline; it does not
+inject context or prove that compaction succeeded. The Backend compares later
+native root-message and summary-archive references with that baseline. New
+archives must extend the recorded archive prefix and account for replacement of
+the observed root messages. Only then can the next nonempty, registered prompt
+restore User Profile preferences and the personal-memory reminder through its
+authorized worktree. Each proven archive replacement permits one local restoration
+request; delivery is best-effort, so a lost HTTP response or Hook termination can
+lose the reminder, and model receipt is not acknowledged. Procedure Memory
+keeps its normal cadence; compaction does not make it due earlier. Empty Continue
+prompts do not deliver or consume the pending restoration. Missing database
+access or a baseline, incompatible history, and unproven replacement skip this
+recovery. There is no immediate-delivery guarantee during the same long-running
+task.
 
 Prompt-context delivery requires a Cursor interface that consumes
 `beforeSubmitPrompt.additional_context`. Static inspection of Cursor 3.21.9's
@@ -497,6 +511,10 @@ response exactly echoed a marker supplied only through the Hook, confirming
 model receipt in that synthetic probe. This does not validate the complete
 production Backend/MemoraX flow or establish compatibility with older releases
 or other interfaces.
+A separate local manual-compaction probe verified native root replacement and
+archiving, but did not verify model receipt after compaction. The restoration
+integration is covered by synthetic tests, not a complete real-client end-to-end
+validation.
 Automatic prompt retrieval remains disabled for Cursor even when
 `[memory.retrieval].enabled` is true. Search remains available through the Skill
 and CLI.

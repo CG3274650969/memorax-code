@@ -25,6 +25,13 @@ export function nativeField(number, value) {
 
 export const nativeMessage = (...fields) => Buffer.concat(fields.flat());
 
+export function nativeCompactionFields({ rootMessageRefs = [], archiveRefs = [] } = {}) {
+  return [
+    ...rootMessageRefs.map((ref) => nativeField(1, ref)),
+    ...archiveRefs.map((ref) => nativeField(13, ref)),
+  ];
+}
+
 // Synthetic native records only. No installed Cursor state or credentials are read.
 export async function databaseFixture(options = {}) {
   const ownedDirectory = options.databasePath ? undefined : await mkdtemp(join(tmpdir(), "memorax-cursor-database-test-"));
@@ -51,6 +58,10 @@ export async function databaseFixture(options = {}) {
   const turn = ({ requestId = randomUUID(), userRef = user(), stepRefs = [step()], extra = [] } = {}) => blob(nativeField(1, nativeMessage(
     nativeField(1, userRef), stepRefs.map((ref) => nativeField(2, ref)), nativeField(3, requestId), extra,
   )));
+  const summaryArchive = ({ summarizedMessageRefs = [], summaryMessageRef, summary = "Synthetic summary text", extra = [], ref } = {}) => blob(nativeMessage(
+    summarizedMessageRefs.map((ref) => nativeField(1, ref)), nativeField(2, summary),
+    ...(summaryMessageRef === undefined ? [] : [nativeField(4, summaryMessageRef)]), extra,
+  ), { ref });
   const writeComposer = (composer) => setRow(`composerData:${sessionId}`, JSON.stringify(composer));
   const write = ({ latestGenerationId, turns = [], stateExtra = [], encoding = "base64" } = {}) => {
     const turnRefs = [], userRefs = [], stepRefs = [];
@@ -68,8 +79,19 @@ export async function databaseFixture(options = {}) {
     });
     return { turnRefs, userRefs, stepRefs, state };
   };
+  const writeCompaction = ({ rootMessageIds = [], archives = [], stateExtra = [], ...options } = {}) => {
+    const archiveRefs = archives.map((archive) => typeof archive === "string" ? Buffer.from(archive, "hex") : summaryArchive({
+      summaryMessageRef: Buffer.from(archive.summaryMessageId, "hex"),
+      summarizedMessageRefs: archive.summarizedMessageIds.map((id) => Buffer.from(id, "hex")),
+      ...(archive.id === undefined ? {} : { ref: Buffer.from(archive.id, "hex") }),
+    }));
+    const native = write({ ...options, stateExtra: [...nativeCompactionFields({
+      rootMessageRefs: rootMessageIds.map((id) => Buffer.from(id, "hex")), archiveRefs,
+    }), ...stateExtra] });
+    return { ...native, rootMessageIds, archiveIds: archiveRefs.map((ref) => ref.toString("hex")) };
+  };
   return {
-    databasePath, sessionId, directory, database, setRow, blob, user, step, turn, write, writeComposer,
+    databasePath, sessionId, directory, database, setRow, blob, user, step, turn, summaryArchive, write, writeCompaction, writeComposer,
     deleteBlob(ref) { database.prepare("DELETE FROM cursorDiskKV WHERE key = ?").run(`agentKv:blob:${ref.toString("hex")}`); },
     async cleanup() { database.close(); if (ownedDirectory) await rm(ownedDirectory, { recursive: true, force: true }); },
   };

@@ -41,7 +41,7 @@ import { cursorDatabasePath } from "./native-database-path.mjs";
 const ADAPTER_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const STATE_VERSION = 1;
 const HOOK_MARKER = "--memorax-code-cursor-hook-v1";
-const REQUIRED_EVENTS = ["sessionStart", "beforeSubmitPrompt", "afterAgentResponse", "stop"];
+const REQUIRED_EVENTS = ["sessionStart", "beforeSubmitPrompt", "preCompact", "afterAgentResponse", "stop"];
 const SKILL_PACKAGE_METADATA = ".memorax-code-package.json";
 
 export async function enableCursorAdapter(options = {}) {

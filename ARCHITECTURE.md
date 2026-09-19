@@ -805,7 +805,15 @@ reminders only after the Backend confirms turn registration and emits them throu
 `beforeSubmitPrompt.additional_context`. For both integrations, a response
 without repository scope still permits its generic reminder. Cursor injects User
 Profile preferences on the first eligible turn and Procedure Memory on the shared
-first-turn and periodic cadence; post-compaction restoration is not connected.
+first-turn and periodic cadence. Its `preCompact` Hook records a native database
+baseline without injecting context or declaring compaction successful. The Backend
+requires an unchanged archive prefix and new archive records that account for
+replacement of observed root messages in the current native context. On the next
+nonempty, registered prompt with an authorized worktree, that evidence permits one
+supplemental Profile and personal-memory reminder. Procedure Memory retains its
+normal cadence. Missing database evidence or a baseline skips restoration; UI
+completion and Hook delivery alone do not authorize it. This path does not promise
+immediate restoration inside a continuing long-running task.
 Codex, DSH, OpenCode, CodeBuddy/WorkBuddy, Trae, and Cursor enable User Profile and
 Procedure Memory builders only with a Backend-resolved worktree. Their original
 client workspace is trace metadata, not local-content authority. Claude Code's independent

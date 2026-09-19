@@ -5,6 +5,7 @@ import { readJsonRuntimeRecord, writePrivateJsonRecord } from "../../../../memor
 import type { MemoryTurnState } from "../../memory/turn-coordinator.js";
 import type { RepositoryMemoryScope } from "../../repository/scope.js";
 import { cursorTextDigest, type CursorContinuationBaseline } from "./database-turn.js";
+import { validCursorCompactionState, type CursorCompactionState } from "./compaction.js";
 
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const DIGEST = /^[0-9a-f]{64}$/;
@@ -33,6 +34,7 @@ export type CursorSessionRecord = {
   client: "cursor";
   sessionId: string;
   repositoryScope?: RepositoryMemoryScope;
+  compaction?: CursorCompactionState;
   // Never recycle generation identities after completion or replacement.
   retiredTurnIds: string[];
   active?: CursorStoredTurn;
@@ -77,12 +79,13 @@ export function retireCursorGeneration(record: CursorSessionRecord): void {
 }
 
 function validRecord(value: unknown, sessionId: string): value is CursorSessionRecord {
-  if (!isRecord(value) || !keys(value, ["version", "client", "sessionId", "repositoryScope", "retiredTurnIds", "active"])
+  if (!isRecord(value) || !keys(value, ["version", "client", "sessionId", "repositoryScope", "compaction", "retiredTurnIds", "active"])
     || value.version !== 2 || value.client !== "cursor" || value.sessionId !== sessionId
     || !Array.isArray(value.retiredTurnIds) || value.retiredTurnIds.length > MAX_RETIRED_TURNS
     || !value.retiredTurnIds.every((id) => typeof id === "string" && UUID.test(id))
     || new Set(value.retiredTurnIds).size !== value.retiredTurnIds.length
-    || (value.repositoryScope !== undefined && !validScope(value.repositoryScope))) return false;
+    || (value.repositoryScope !== undefined && !validScope(value.repositoryScope))
+    || (value.compaction !== undefined && !validCursorCompactionState(value.compaction))) return false;
   return value.active === undefined || (validTurn(value.active) && !value.retiredTurnIds.includes(value.active.turnId));
 }
 

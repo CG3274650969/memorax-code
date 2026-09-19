@@ -52,6 +52,29 @@ test("Cursor response sends only the exact native text digest and stop preserves
   } finally { await fixture.close(); }
 });
 
+test("Cursor preCompact sends only native identity and does not mark or inject reminders", async () => {
+  const fixture = await createFixture();
+  try {
+    fixture.control.body.restorePersonalMemory = true;
+    fixture.control.body.repoMemoryWorktree = fixture.root;
+    const transcriptPath = join(fixture.root, "native.jsonl");
+    const result = await runHook(fixture, { hook_event_name: "preCompact", transcript_path: transcriptPath,
+      trigger: "manual", prompt: "private prompt", text: "private context" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, "");
+    assert.deepEqual(fixture.requests, [{ path: "/memory/pre-compact", body: {
+      version: 1, client: "cursor", sessionId, turnId, cwd: fixture.root,
+      databasePath: fixture.databasePath, transcriptPath,
+    } }]);
+    await assert.rejects(readFile(join(fixture.home, "adapters", "cursor", "memory-skill-reminders.json")), { code: "ENOENT" });
+    for (const patch of [{ conversation_id: "invalid" }, { generation_id: undefined },
+      { workspace_roots: [] }, { session_id: turnId }]) {
+      assert.equal((await runHook(fixture, { hook_event_name: "preCompact", ...patch })).stdout, "");
+    }
+    assert.equal(fixture.requests.length, 1);
+  } finally { await fixture.close(); }
+});
+
 test("Cursor sessionStart uses only native output fields and explicit per-command CLI environment", async () => {
   const fixture = await createFixture();
   try {
@@ -185,6 +208,68 @@ test("Cursor does not infer personal-memory authority from the native workspace"
       assert.match(context, /MemoraX Code reminder:/);
       assert.doesNotMatch(context, /Prefer concise Cursor answers|Run the focused Cursor test first/);
     }
+  } finally { await fixture.close(); }
+});
+
+test("Cursor restores authorized profiles after compaction without advancing procedure cadence", async () => {
+  const fixture = await createFixture();
+  try {
+    const repo = join(fixture.root, "authorized-repo");
+    await createPersonalMemoryRepo(repo);
+    fixture.control.body.repoMemoryWorktree = repo;
+    const env = { MEMORAX_CODE_MEMORY_SKILL_REMINDER_INTERVAL_TURNS: "3" };
+    const prompt = (index) => runHook(fixture, { hook_event_name: "beforeSubmitPrompt",
+      generation_id: generationId(index), prompt: `question ${index}` }, env);
+    await prompt(0);
+    const statePath = join(fixture.home, "adapters", "cursor", "memory-skill-reminders.json");
+    const before = await readFile(statePath, "utf8");
+    await runHook(fixture, { hook_event_name: "preCompact" }, env);
+    assert.equal(await readFile(statePath, "utf8"), before);
+
+    fixture.control.body.restorePersonalMemory = true;
+    const restored = JSON.parse((await prompt(1)).stdout).additional_context;
+    assert.match(restored, /Prefer concise Cursor answers/);
+    assert.match(restored, /MemoraX Code personal-memory reminder:/);
+    assert.doesNotMatch(restored, /Run the focused Cursor test first|MemoraX Code reminder:/);
+    assert.deepEqual(fixture.requests.filter(({ path }) => path === "/memory/skill-reminder").at(-1).body.triggers,
+      ["post_compaction"]);
+    assert.equal(JSON.parse(await readFile(statePath, "utf8")).sessions[sessionId].supplementalReminderPending, false);
+
+    fixture.control.body.restorePersonalMemory = false;
+    assert.deepEqual(JSON.parse((await prompt(2)).stdout), { continue: true });
+    const cadence = JSON.parse((await prompt(3)).stdout).additional_context;
+    assert.match(cadence, /Run the focused Cursor test first/);
+    assert.doesNotMatch(cadence, /Prefer concise Cursor answers/);
+    assert.deepEqual(fixture.requests.filter(({ path }) => path === "/memory/skill-reminder").at(-1).body.triggers,
+      ["cadence"]);
+  } finally { await fixture.close(); }
+});
+
+test("Cursor ignores restoration without accepted real-prompt and worktree authority", async () => {
+  const fixture = await createFixture();
+  try {
+    const repo = join(fixture.root, "authorized-repo");
+    await createPersonalMemoryRepo(repo);
+    const env = { MEMORAX_CODE_MEMORY_SKILL_REMINDER_INTERVAL_TURNS: "10" };
+    const cases = [
+      { ok: false }, { recorded: false }, { repoMemoryWorktree: undefined },
+      { repoMemoryWorktree: "relative-repo" }, { prompt: "  " }, { restorePersonalMemory: "true" },
+    ];
+    for (const [index, { prompt = "next question", ...response }] of cases.entries()) {
+      const conversation = generationId(index + 40);
+      fixture.control.body = { ok: true, recorded: true, repoMemoryWorktree: repo };
+      await runHook(fixture, { hook_event_name: "beforeSubmitPrompt", conversation_id: conversation,
+        generation_id: generationId(100), prompt: "first question" }, env);
+      fixture.control.body = { ok: true, recorded: true, restorePersonalMemory: true,
+        repoMemoryWorktree: repo, ...response };
+      const result = await runHook(fixture, { hook_event_name: "beforeSubmitPrompt", conversation_id: conversation,
+        generation_id: generationId(101), prompt }, env);
+      assert.deepEqual(JSON.parse(result.stdout), { continue: true });
+      const state = JSON.parse(await readFile(join(fixture.home, "adapters", "cursor", "memory-skill-reminders.json"), "utf8"));
+      assert.equal(state.sessions[conversation].supplementalReminderPending, undefined);
+    }
+    assert.equal(fixture.requests.filter(({ path, body }) => path === "/memory/skill-reminder"
+      && body.triggers.includes("post_compaction")).length, 0);
   } finally { await fixture.close(); }
 });
 

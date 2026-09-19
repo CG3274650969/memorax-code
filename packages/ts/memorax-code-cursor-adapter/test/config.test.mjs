@@ -11,7 +11,7 @@ import {
 } from "../src/config.mjs";
 import { writeCursorRuntimeObservation } from "../src/runtime-observation.mjs";
 
-const events = ["sessionStart", "beforeSubmitPrompt", "afterAgentResponse", "stop"];
+const events = ["sessionStart", "beforeSubmitPrompt", "preCompact", "afterAgentResponse", "stop"];
 
 test("Cursor discovery honors home overrides and actual platform installations", () => {
   const home = join(tmpdir(), "cursor-discovery");
@@ -44,6 +44,7 @@ test("Cursor installation owns only its flat Hook entries and materialized share
     assert.equal(hooks.version, 1);
     assert.deepEqual(hooks.custom, { thirdPartyExtensibilityEnabled: true });
     assert.deepEqual(hooks.hooks.beforeSubmitPrompt[0], fixture.userHook);
+    assert.deepEqual(hooks.hooks.preCompact[0], fixture.userCompactHook);
     assert.deepEqual(hooks.hooks.afterFileEdit, [{ command: "user-after-edit" }]);
     for (const event of events) {
       const managed = hooks.hooks[event].filter(hook => hook.command.includes("--memorax-code-cursor-hook-v1"));
@@ -62,7 +63,7 @@ test("Cursor installation owns only its flat Hook entries and materialized share
     await writeFile(unrelated, "user skill");
     assert.equal((await disableCursorAdapter(fixture.options)).enabled, false);
     assert.deepEqual((await fixture.hooks()).hooks, {
-      beforeSubmitPrompt: [fixture.userHook], afterFileEdit: [{ command: "user-after-edit" }],
+      beforeSubmitPrompt: [fixture.userHook], preCompact: [fixture.userCompactHook], afterFileEdit: [{ command: "user-after-edit" }],
     });
     assert.equal(await readFile(join(installed.skillPath, "SKILL.md"), "utf8"), "# Canonical Skill fixture\n");
     assert.equal((await removeCursorAdapterInstallation(fixture.options)).removed, true);
@@ -167,7 +168,7 @@ test("Cursor install rejects unmanaged Skills and malformed or unknown-version m
     assert.equal((await enableCursorAdapter(fixture.options)).reason, "skill_conflict");
     assert.equal(await readFile(join(target, "SKILL.md"), "utf8"), "user-owned");
     await rm(target, { recursive: true });
-    for (const content of ["{ broken", '{"version":2,"hooks":{}}', '{"version":1,"hooks":{"stop":{}}}']) {
+    for (const content of ["{ broken", '{"version":2,"hooks":{}}', '{"version":1,"hooks":{"stop":{}}}', '{"version":1,"hooks":{"preCompact":{}}}']) {
       await writeFile(join(fixture.options.cursorHome, "hooks.json"), content);
       const result = await enableCursorAdapter(fixture.options);
       assert.equal(result.reason, "hooks_invalid");
@@ -226,11 +227,12 @@ async function createFixture() {
     writeFile(join(options.skillSourcePath, "SKILL.md"), "# Canonical Skill fixture\n"),
   ]);
   const userHook = { command: "user-command", matcher: "UserPromptSubmit", timeout: 5 };
+  const userCompactHook = { command: "user-compact-command", timeout: 5 };
   await writeFile(join(cursorHome, "hooks.json"), JSON.stringify({
     version: 1, custom: { thirdPartyExtensibilityEnabled: true },
-    hooks: { beforeSubmitPrompt: [userHook], afterFileEdit: [{ command: "user-after-edit" }] },
+    hooks: { beforeSubmitPrompt: [userHook], preCompact: [userCompactHook], afterFileEdit: [{ command: "user-after-edit" }] },
   }));
-  return { root, options, userHook,
+  return { root, options, userHook, userCompactHook,
     hooks: async () => JSON.parse(await readFile(join(cursorHome, "hooks.json"), "utf8")),
     close: () => rm(root, { recursive: true, force: true }),
   };

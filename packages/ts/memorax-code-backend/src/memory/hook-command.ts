@@ -66,6 +66,9 @@ const SKILL_REMINDER_KEYS: Readonly<Record<MemoryHookClient, ReadonlySet<string>
   trae: new Set([...BASE_COMMAND_KEYS, "turnId", "content", "triggers"]),
   cursor: new Set([...BASE_COMMAND_KEYS, "turnId", "content", "triggers"]),
 };
+const PRE_COMPACT_KEYS = {
+  cursor: new Set(["version", "client", "sessionId", "turnId", "cwd", "databasePath", "transcriptPath"]),
+};
 
 type MemoryHookCommandBase<Client extends MemoryHookClient> = Readonly<{
   version: typeof MEMORY_HOOK_COMMAND_VERSION;
@@ -117,6 +120,16 @@ export type CursorTurnStartCommand = MemoryHookCommandBase<"cursor"> & Readonly<
   turnId: string;
   cwd: string;
   prompt: string;
+  transcriptPath?: string;
+}>;
+
+export type CursorPreCompactCommand = Readonly<{
+  version: typeof MEMORY_HOOK_COMMAND_VERSION;
+  client: "cursor";
+  sessionId: string;
+  turnId: string;
+  cwd: string;
+  databasePath: string;
   transcriptPath?: string;
 }>;
 
@@ -262,6 +275,27 @@ export type SkillReminderCommand =
 export type MemoryHookCommandParseResult<Command> =
   | { ok: true; command: Command }
   | { ok: false; error: typeof INVALID_MEMORY_HOOK_COMMAND };
+
+export function parsePreCompactCommand(
+  value: unknown,
+): MemoryHookCommandParseResult<CursorPreCompactCommand> {
+  if (!isRecord(value)) return invalidCommand();
+  const base = parseCommandBase(value, PRE_COMPACT_KEYS);
+  if (!base || base.client !== "cursor") return invalidCommand();
+  const turnId = requiredStringField(value, "turnId");
+  const databasePath = requiredStringField(value, "databasePath");
+  const transcriptPath = optionalStringField(value, "transcriptPath");
+  if (!turnId || !validCursorIdentity(base.sessionId, turnId)
+    || !base.cwd || !isAbsolute(base.cwd) || base.cwd.includes("\0")
+    || !databasePath || !isAbsolute(databasePath) || databasePath.includes("\0")
+    || !transcriptPath.ok || (transcriptPath.value
+      && (!isAbsolute(transcriptPath.value) || transcriptPath.value.includes("\0")))) return invalidCommand();
+  return { ok: true, command: {
+    version: MEMORY_HOOK_COMMAND_VERSION, client: "cursor", sessionId: base.sessionId,
+    turnId, cwd: base.cwd, databasePath,
+    ...(transcriptPath.value ? { transcriptPath: transcriptPath.value } : {}),
+  } };
+}
 
 export function parseTurnStartCommand(
   value: unknown,

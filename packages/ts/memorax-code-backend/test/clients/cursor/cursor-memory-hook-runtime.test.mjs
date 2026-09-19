@@ -404,3 +404,157 @@ test("Cursor restart retries temporary contention on the pending session lock", 
     assert.equal(second.writes[0].assistantText, answer);
   } finally { release(); await holder; first.instance.close(); second?.instance.close(); await f.cleanup(); }
 });
+
+
+async function compactionFixture() {
+  const f = await fixture();
+  const git = join(f.workspace, ".git");
+  await mkdir(join(git, "objects"), { recursive: true });
+  await mkdir(join(git, "refs", "heads"), { recursive: true });
+  await writeFile(join(git, "HEAD"), "ref: refs/heads/main\n");
+  await writeFile(join(git, "config"), '[remote "origin"]\n\turl = https://example.test/owner/cursor-compaction.git\n');
+  const roots = ["1".repeat(64), "2".repeat(64), "3".repeat(64)];
+  const summary = "4".repeat(64);
+  const archive = { summaryMessageId: summary, summarizedMessageIds: roots.slice(1) };
+  const { prompt: _prompt, ...identity } = f.start;
+  return { ...f, roots, summary, archive,
+    compact: { ...identity, turnId: randomUUID() },
+    next: () => ({ ...f.start, turnId: randomUUID(), prompt: "Synthetic prompt after compaction." }),
+    before: () => f.writeCompaction({ rootMessageIds: roots, latestGenerationId: f.start.turnId, turns: [f.native()] }),
+    after: () => f.writeCompaction({ rootMessageIds: [roots[0], summary], archives: [archive],
+      latestGenerationId: f.start.turnId, turns: [f.native()] }),
+  };
+}
+
+test("Cursor missing first-turn DB can arm at preCompact and restores once across restart", async () => {
+  const f = await compactionFixture(); let current = runtime(f);
+  try {
+    const start = await current.instance.recordTurnStart(f.start);
+    assert.equal(start.repoMemoryWorktree, f.workspace);
+    assert.equal((await current.instance.recordPreCompact(f.compact)).reason, "database_session_missing");
+    assert.equal((await readState(f)).compaction, undefined);
+    f.before();
+    const before = await readState(f);
+    assert.deepEqual(await current.instance.recordPreCompact(f.compact), { ok: true, recorded: true });
+    assert.deepEqual(await current.instance.recordPreCompact(f.compact), { ok: true, recorded: true });
+    assert.deepEqual((await readState(f)).active, before.active);
+    current.instance.close(); current = runtime(f);
+    f.after();
+    const next = f.next();
+    const restored = await current.instance.recordTurnStart(next);
+    assert.equal(restored.recorded, true);
+    assert.equal(restored.restorePersonalMemory, true);
+    const saved = await readState(f);
+    assert.equal(saved.compaction.baseline, undefined);
+    assert.equal(saved.compaction.processedArchiveIds.length, 1);
+    assert.equal(JSON.stringify(saved.compaction).includes("Synthetic summary text"), false);
+    assert.equal((await current.instance.recordTurnStart(next)).recorded, false);
+    current.instance.close(); current = runtime(f);
+    assert.equal((await current.instance.recordTurnStart(f.next())).restorePersonalMemory, undefined);
+    assert.equal(current.writes.length, 0);
+  } finally { current.instance.close(); await f.cleanup(); }
+});
+
+test("Cursor does not infer compression from an archive without an observed baseline", async () => {
+  const f = await compactionFixture(); const { instance } = runtime(f);
+  try {
+    await instance.recordTurnStart(f.start);
+    assert.equal((await instance.recordPreCompact(f.compact)).recorded, false);
+    f.after();
+    assert.equal((await instance.recordTurnStart(f.next())).restorePersonalMemory, undefined);
+    assert.equal((await readState(f)).compaction, undefined);
+  } finally { instance.close(); await f.cleanup(); }
+});
+
+test("Cursor compaction interruption and unrelated branch updates cannot request restoration", async (t) => {
+  for (const scenario of ["cancelled", "ordinary_append", "summary_not_applied", "unrelated_archive", "lost_preserved_root", "archive_rollback"]) {
+    await t.test(scenario, async () => {
+      const f = await compactionFixture(); const { instance } = runtime(f);
+      try {
+        await instance.recordTurnStart(f.start);
+        let initial = f.before();
+        if (scenario === "archive_rollback") initial = f.after();
+        assert.equal((await instance.recordPreCompact(f.compact)).recorded, true);
+        if (scenario === "ordinary_append") f.writeCompaction({ rootMessageIds: [...f.roots, "5".repeat(64)] });
+        if (scenario === "summary_not_applied") f.writeCompaction({ rootMessageIds: f.roots, archives: [f.archive] });
+        if (scenario === "unrelated_archive") f.writeCompaction({ rootMessageIds: [f.roots[0], f.summary],
+          archives: [{ ...f.archive, summarizedMessageIds: ["6".repeat(64)] }] });
+        if (scenario === "lost_preserved_root") f.writeCompaction({ rootMessageIds: [f.summary], archives: [f.archive] });
+        if (scenario === "archive_rollback") {
+          assert.equal(initial.archiveIds.length, 1);
+          f.before();
+        }
+        assert.equal((await instance.recordTurnStart(f.next())).restorePersonalMemory, undefined);
+      } finally { instance.close(); await f.cleanup(); }
+    });
+  }
+});
+
+test("Cursor consecutive compactions retain replacement evidence if a later attempt is cancelled", async () => {
+  const f = await compactionFixture(); const { instance } = runtime(f);
+  try {
+    await instance.recordTurnStart(f.start); f.before();
+    await instance.recordPreCompact(f.compact);
+    const first = f.after();
+    await instance.recordPreCompact({ ...f.compact, turnId: randomUUID() });
+    const secondSummary = "7".repeat(64);
+    const second = f.writeCompaction({ rootMessageIds: [f.roots[0], secondSummary], archives: [
+      ...first.archiveIds, { summaryMessageId: secondSummary, summarizedMessageIds: [f.summary] },
+    ] });
+    await instance.recordPreCompact({ ...f.compact, turnId: randomUUID() });
+    // The third attempt aborts without replacing these roots or archives.
+    const result = await instance.recordTurnStart(f.next());
+    assert.equal(result.restorePersonalMemory, true);
+    assert.deepEqual((await readState(f)).compaction.processedArchiveIds, second.archiveIds);
+    // Replaying an already acknowledged native archive after a rollback is not
+    // a new restoration request, even when a new preCompact Hook is received.
+    f.before(); await instance.recordPreCompact({ ...f.compact, turnId: randomUUID() }); f.after();
+    assert.equal((await instance.recordTurnStart(f.next())).restorePersonalMemory, undefined);
+  } finally { instance.close(); await f.cleanup(); }
+});
+
+test("Cursor Continue retains compaction evidence for the next nonempty prompt", async () => {
+  const f = await compactionFixture(); const { instance } = runtime(f);
+  try {
+    await instance.recordTurnStart(f.start); f.before(); await instance.recordPreCompact(f.compact); f.after();
+    const continuation = await instance.recordTurnStart({ ...f.next(), prompt: "" });
+    assert.equal(continuation.restorePersonalMemory, undefined);
+    assert.ok((await readState(f)).compaction.baseline);
+    assert.equal((await instance.recordTurnStart(f.next())).restorePersonalMemory, true);
+  } finally { instance.close(); await f.cleanup(); }
+});
+
+test("Cursor compaction observations require registered scope and remain isolated from Add", async (t) => {
+  for (const scenario of ["missing_start", "non_git_workspace", "changed_database", "changed_workspace", "changed_user"]) {
+    await t.test(scenario, async () => {
+      const f = scenario === "non_git_workspace" ? await fixture() : await compactionFixture();
+      const { instance } = runtime(f);
+      try {
+        if (scenario !== "missing_start") await instance.recordTurnStart(f.start);
+        const { prompt: _prompt, ...identity } = f.start;
+        const command = { ...identity, turnId: randomUUID() };
+        f.writeCompaction({ rootMessageIds: ["1".repeat(64)] });
+        const before = scenario === "missing_start" ? undefined : (await readState(f)).active;
+        if (scenario === "changed_database") command.databasePath = join(f.root, "other.vscdb");
+        if (scenario === "changed_workspace") command.cwd = f.root;
+        if (scenario === "changed_user") f.env.MEMORAX_CODE_MEMORAX_USER_ID = "another-synthetic-user";
+        assert.equal((await instance.recordPreCompact(command)).recorded, false);
+        if (before) {
+          const saved = await readState(f);
+          assert.deepEqual(saved.active, before);
+          assert.equal(saved.compaction, undefined);
+        }
+      } finally { instance.close(); await f.cleanup(); }
+    });
+  }
+});
+
+test("Cursor changed user binding discards armed compaction before the next prompt", async () => {
+  const f = await compactionFixture(); const { instance } = runtime(f);
+  try {
+    await instance.recordTurnStart(f.start); f.before(); await instance.recordPreCompact(f.compact); f.after();
+    f.env.MEMORAX_CODE_MEMORAX_USER_ID = "another-synthetic-user";
+    assert.equal((await instance.recordTurnStart(f.next())).restorePersonalMemory, undefined);
+    assert.equal((await readState(f)).compaction, undefined);
+  } finally { instance.close(); await f.cleanup(); }
+});

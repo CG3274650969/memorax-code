@@ -682,7 +682,7 @@ memorax-code-cursor status --json
 `start --clients` selects the full managed client set; include any other
 integrations you want to retain. Cursor uses `CURSOR_HOME`, otherwise `~/.cursor`;
 `--cursor-home` overrides the root for a command. Setup manages only its marked
-`sessionStart`, `beforeSubmitPrompt`, `afterAgentResponse`, and `stop` entries in
+`sessionStart`, `beforeSubmitPrompt`, `preCompact`, `afterAgentResponse`, and `stop` entries in
 `hooks.json`, plus `skills/memorax-code/`. It does not change Cursor's third-party
 integration setting or require a Claude Code installation.
 
@@ -705,7 +705,7 @@ could not be opened or read. Keep Cursor's native database and WAL together;
 do not substitute an exported JSONL or another client's history.
 
 For `database_runtime_unavailable`, run the Backend with Node.js 22.13 or later
-and restart it. Cursor automatic Add requires built-in `node:sqlite`; the
+and restart it. Cursor automatic Add and compaction restoration require built-in `node:sqlite`; the
 remaining integrations and explicit CLI commands keep their existing runtime
 requirements. A configured or observed Hook alone does not prove that this
 database capability is available.
@@ -716,6 +716,18 @@ automatic prompt retrieval, even when it is enabled for other clients. Follow th
 session-start instructions to provide the explicit Cursor client/session
 environment for CLI commands; shell tools are not assumed to inherit Hook
 environment variables.
+
+If personal memory is missing after compaction, first confirm that the managed
+`preCompact` Hook is configured and the Backend can read the correct native
+database. This Hook only captures a baseline. Restoration requires later database
+evidence that new summary archives replaced the observed root context; a completed
+UI status or a `preCompact` event alone is insufficient. The next nonempty prompt
+must be registered successfully and have an authorized Git worktree. Empty
+Continue prompts do not trigger restoration, and there is no immediate-delivery
+guarantee within the same continuing task. Profile preferences and the personal
+reminder can be restored outside the regular cadence; Procedure Memory keeps its
+normal cadence. Missing baselines, unreadable databases, or incompatible history
+skip recovery rather than guessing from Hook text.
 
 Automatic Add requires native database content matching the observed generation,
 original user, and final-response digest, plus a completed Stop. Missing content

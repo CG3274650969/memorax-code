@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { test } from "node:test";
-import { readCursorDatabaseSnapshot } from "../../../dist/clients/cursor/database-snapshot.js";
-import { databaseFixture, nativeField, nativeMessage } from "./support/database-fixtures.mjs";
+import { readCursorCompactionSnapshot, readCursorDatabaseSnapshot } from "../../../dist/clients/cursor/database-snapshot.js";
+import { databaseFixture, nativeCompactionFields, nativeField, nativeMessage } from "./support/database-fixtures.mjs";
 
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const read = (f) => readCursorDatabaseSnapshot(f);
@@ -182,5 +182,127 @@ test("Cursor rejects an incompatible SQLite schema without retrying it as delaye
   try {
     f.database.exec("DROP TABLE cursorDiskKV");
     assert.deepEqual(await read(f), failure("database_native_format_invalid"));
+  } finally { await f.cleanup(); }
+});
+
+test("Cursor compaction snapshots expose only root and archive identities in a read-only snapshot", async () => {
+  const f = await databaseFixture();
+  try {
+    const first = Buffer.alloc(32, 1), second = Buffer.alloc(32, 2), summary = Buffer.alloc(32, 3);
+    const archive = f.summaryArchive({
+      summarizedMessageRefs: [first, second], summaryMessageRef: summary,
+      summary: "Synthetic summary body must stay private to Cursor",
+      extra: [nativeField(99, "Future archive metadata is not memory content")],
+    });
+    f.write({ turns: [{ requestId: randomUUID(), prompt: "Original user text" }], stateExtra: nativeCompactionFields({
+      rootMessageRefs: [summary], archiveRefs: [archive],
+    }) });
+    // No message blob exists for these refs: this projection reads identities,
+    // never root, summarized, or summary message bodies.
+    const before = { hash: digest(await readFile(f.databasePath)), mtime: (await stat(f.databasePath)).mtimeMs };
+    const identityStat = await stat(f.databasePath, { bigint: true });
+    const databaseIdentity = digest(JSON.stringify([await realpath(f.databasePath), String(identityStat.dev), String(identityStat.ino)]));
+    assert.deepEqual(await readCursorCompactionSnapshot(f), { ok: true, snapshot: {
+      databaseIdentity, rootMessageIds: [summary.toString("hex")], archives: [{
+        id: archive.toString("hex"), summaryMessageId: summary.toString("hex"),
+        summarizedMessageIds: [first.toString("hex"), second.toString("hex")],
+      }],
+    } });
+    assert.equal((await read(f)).snapshot.turns[0].userPrompt, "Original user text");
+    assert.deepEqual({ hash: digest(await readFile(f.databasePath)), mtime: (await stat(f.databasePath)).mtimeMs }, before);
+  } finally { await f.cleanup(); }
+});
+
+test("Cursor compaction snapshots preserve nested summary lineage and bind the database file", async () => {
+  const f = await databaseFixture();
+  const other = await databaseFixture({ sessionId: f.sessionId });
+  try {
+    const id = (n) => Buffer.alloc(32, n).toString("hex");
+    f.writeCompaction({ rootMessageIds: [id(1), id(2)] });
+    const initial = await readCursorCompactionSnapshot(f);
+    assert.deepEqual(initial.snapshot.archives, []);
+    const first = f.writeCompaction({ rootMessageIds: [id(3)], archives: [{
+      summarizedMessageIds: [id(1), id(2)], summaryMessageId: id(3),
+    }] });
+    const second = f.writeCompaction({ rootMessageIds: [id(4)], archives: [first.archiveIds[0], {
+      summarizedMessageIds: [id(3)], summaryMessageId: id(4),
+    }] });
+    const current = await readCursorCompactionSnapshot(f);
+    assert.equal(current.snapshot.databaseIdentity, initial.snapshot.databaseIdentity);
+    assert.deepEqual(current.snapshot.archives.map(({ id }) => id), second.archiveIds);
+    assert.deepEqual(current.snapshot.archives[1].summarizedMessageIds, [id(3)]);
+    other.writeCompaction({ rootMessageIds: [id(4)] });
+    assert.notEqual((await readCursorCompactionSnapshot(other)).snapshot.databaseIdentity, current.snapshot.databaseIdentity);
+  } finally { await f.cleanup(); await other.cleanup(); }
+});
+
+test("Cursor missing compaction records are retryable and do not block ordinary Add content", async () => {
+  const f = await databaseFixture();
+  try {
+    assert.deepEqual(await readCursorCompactionSnapshot(f), failure("database_session_missing", true));
+    f.writeComposer({});
+    assert.deepEqual(await readCursorCompactionSnapshot(f), failure("database_state_missing", true));
+    f.write({ turns: [{ requestId: randomUUID() }], stateExtra: nativeCompactionFields({ archiveRefs: [Buffer.alloc(32, 4)] }) });
+    assert.deepEqual(await readCursorCompactionSnapshot(f), failure("database_blob_missing", true));
+    assert.equal((await read(f)).ok, true);
+    f.write({ turns: [{ requestId: randomUUID() }], stateExtra: [nativeField(11, Buffer.alloc(0))] });
+    const legacy = await readCursorCompactionSnapshot(f);
+    assert.equal(legacy.ok, true);
+    assert.deepEqual(legacy.snapshot.rootMessageIds, []);
+    assert.deepEqual(legacy.snapshot.archives, []);
+  } finally { await f.cleanup(); }
+});
+
+test("Cursor malformed compaction references fail closed independently of Add turn decoding", async () => {
+  const f = await databaseFixture();
+  try {
+    const message = Buffer.alloc(32, 1), summary = Buffer.alloc(32, 2);
+    const validArchive = f.summaryArchive({ summarizedMessageRefs: [message], summaryMessageRef: summary });
+    const malformedArchives = [
+      f.blob(Buffer.from([0x0a, 0x20, 1])),
+      f.summaryArchive({ summarizedMessageRefs: [message] }),
+      f.summaryArchive({ summarizedMessageRefs: [], summaryMessageRef: summary }),
+      f.summaryArchive({ summarizedMessageRefs: [message, message], summaryMessageRef: summary }),
+      f.summaryArchive({ summarizedMessageRefs: [summary], summaryMessageRef: summary }),
+      f.summaryArchive({ summarizedMessageRefs: [Buffer.alloc(0)], summaryMessageRef: summary }),
+      f.summaryArchive({ summarizedMessageRefs: [message], summaryMessageRef: Buffer.alloc(65) }),
+      f.summaryArchive({ summarizedMessageRefs: [message], summaryMessageRef: summary, extra: [nativeField(4, summary)] }),
+      f.blob(nativeMessage(nativeField(1, true), nativeField(4, summary))),
+    ];
+    const invalidStates = [
+      [nativeField(1, true)], [nativeField(13, true)],
+      nativeCompactionFields({ rootMessageRefs: [message, message] }),
+      nativeCompactionFields({ rootMessageRefs: [Buffer.alloc(0)] }),
+      nativeCompactionFields({ archiveRefs: [validArchive, validArchive] }),
+      nativeCompactionFields({ archiveRefs: [validArchive, f.summaryArchive({
+        summarizedMessageRefs: [Buffer.alloc(32, 3)], summaryMessageRef: summary,
+      })] }),
+      ...malformedArchives.map((ref) => nativeCompactionFields({ archiveRefs: [ref] })),
+    ];
+    for (const stateExtra of invalidStates) {
+      f.write({ turns: [{ requestId: randomUUID(), prompt: "Unaffected native question" }], stateExtra });
+      assert.deepEqual(await readCursorCompactionSnapshot(f), failure("database_native_format_invalid"));
+      assert.equal((await read(f)).snapshot.turns[0].userPrompt, "Unaffected native question");
+    }
+  } finally { await f.cleanup(); }
+});
+
+test("Cursor compaction bounds root references, archive count and total summarized references", async () => {
+  const f = await databaseFixture();
+  try {
+    const refs = (count, start = 0) => Array.from({ length: count }, (_, index) => {
+      const ref = Buffer.alloc(4); ref.writeUInt32BE(start + index); return ref;
+    });
+    const firstArchive = f.summaryArchive({ summarizedMessageRefs: refs(16_384), summaryMessageRef: Buffer.alloc(32, 1) });
+    const secondArchive = f.summaryArchive({ summarizedMessageRefs: refs(16_385, 16_384), summaryMessageRef: Buffer.alloc(32, 2) });
+    for (const stateExtra of [
+      nativeCompactionFields({ rootMessageRefs: refs(4097) }),
+      nativeCompactionFields({ archiveRefs: refs(1025) }),
+      nativeCompactionFields({ archiveRefs: [firstArchive, secondArchive] }),
+    ]) {
+      f.write({ stateExtra });
+      assert.deepEqual(await readCursorCompactionSnapshot(f), failure("database_snapshot_too_large"));
+      assert.equal((await read(f)).ok, true);
+    }
   } finally { await f.cleanup(); }
 });

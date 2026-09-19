@@ -1,10 +1,13 @@
 import { defaultMemoraxCodeHome } from "../../config/memorax-code.js";
 import { createHarnessMemoryRuntime, type HarnessMemoryRuntimeOptions } from "../../memory/harness-runtime.js";
-import type { CursorTurnStartCommand, CursorWritebackCommand, MemoryHookTurnStartResult } from "../../memory/hook-command.js";
+import type { CursorPreCompactCommand, CursorTurnStartCommand, CursorWritebackCommand, MemoryHookTurnStartResult } from "../../memory/hook-command.js";
+import { resolvedRepoMemoryWorktree } from "../../memory/repository-session.js";
+import type { RepositoryMemoryScope } from "../../repository/scope.js";
 import type { MemoryTurnState } from "../../memory/turn-coordinator.js";
 import { traceContextFromCursorHookBody, type TraceContext } from "../../trace/context.js";
 import { markCurrentTraceTurnOutcome, recordTraceEvent, traceTurnEventId } from "../../trace/store.js";
-import { readCursorDatabaseSnapshot } from "./database-snapshot.js";
+import { readCursorCompactionSnapshot, readCursorDatabaseSnapshot } from "./database-snapshot.js";
+import { captureCursorCompaction, consumeCursorCompaction } from "./compaction.js";
 import { captureCursorContinuation, cursorTextDigest, selectCursorDatabaseTurn } from "./database-turn.js";
 import { cursorPendingSessions, retireCursorGeneration, withCursorSessionRecord, type CursorSessionRecord, type CursorStoredTurn } from "./turn-store.js";
 
@@ -12,7 +15,11 @@ export type CursorMemoryHookWritebackResult =
   | { ok: true; scheduled: true }
   | { ok: true; scheduled: false; reason: string };
 
-export type CursorMemoryHookTurnStartResult = MemoryHookTurnStartResult & { recorded: boolean };
+export type CursorMemoryHookTurnStartResult = MemoryHookTurnStartResult & {
+  recorded: boolean;
+  restorePersonalMemory?: true;
+};
+export type CursorMemoryHookPreCompactResult = { ok: true; recorded: boolean; reason?: string };
 
 export type CursorMemoryHookRuntimeOptions = HarnessMemoryRuntimeOptions & {
   databaseRetryDelayMs?: number;
@@ -22,6 +29,7 @@ export type CursorMemoryHookRuntimeOptions = HarnessMemoryRuntimeOptions & {
 
 export type CursorMemoryHookRuntime = {
   recordTurnStart(command: CursorTurnStartCommand): Promise<CursorMemoryHookTurnStartResult>;
+  recordPreCompact(command: CursorPreCompactCommand): Promise<CursorMemoryHookPreCompactResult>;
   writeback(command: CursorWritebackCommand): Promise<CursorMemoryHookWritebackResult>;
   size(): number;
   close(): void;
@@ -163,6 +171,43 @@ export function createCursorMemoryHookRuntime(
   for (const pending of cursorPendingSessions(home)) scheduleRetry(pending.sessionId, pending.retryUntil);
 
   return {
+    async recordPreCompact(command) {
+      const skipped = (reason: string): CursorMemoryHookPreCompactResult => ({ ok: true, recorded: false, reason });
+      if (command.client !== "cursor") return skipped("client_mismatch");
+      try {
+        return await withCursorSessionRecord(stateOptions(command.sessionId), async (record, save) => {
+          const active = record.active;
+          if (!active) return skipped("start_missing");
+          if (active.databasePath !== command.databasePath || active.cwd !== command.cwd) {
+            delete record.compaction;
+            save();
+            return skipped("database_or_workspace_changed");
+          }
+          const repositoryMemory = await memory.resolveRepositoryMemory({
+            sessionId: command.sessionId, cwd: command.cwd,
+            restoreScope: async () => record.repositoryScope,
+          });
+          const scope = repositoryMemory.ok ? repositoryMemory.memory.scope : undefined;
+          if (!scope || !resolvedRepoMemoryWorktree(repositoryMemory) || !record.repositoryScope
+            || compactionScopeKey(scope) !== compactionScopeKey(record.repositoryScope)) {
+            delete record.compaction;
+            save();
+            return skipped("workspace_scope_unavailable");
+          }
+          const native = await readCursorCompactionSnapshot(command);
+          if (!native.ok) return skipped(native.reason);
+          if (!native.snapshot.rootMessageIds.length) return skipped("compaction_roots_missing");
+          record.compaction = captureCursorCompaction(record.compaction, {
+            databasePath: command.databasePath, cwd: command.cwd, scopeKey: compactionScopeKey(scope),
+          }, native.snapshot);
+          // Manual summarization has its own generation identity. Observing it
+          // must never register, replace, or complete the active Add turn.
+          save();
+          return { ok: true, recorded: true };
+        });
+      } catch { return skipped("turn_state_unavailable"); }
+    },
+
     async recordTurnStart(command) {
       if (command.client !== "cursor") return { ok: true, recorded: false };
       const createdAt = now();
@@ -246,8 +291,26 @@ export function createCursorMemoryHookRuntime(
               save();
             },
           });
+          let restorePersonalMemory = false;
+          if (record.compaction) {
+            const scope = repositoryMemory.ok ? repositoryMemory.memory.scope : undefined;
+            const scopeKey = scope ? compactionScopeKey(scope) : undefined;
+            if (!result.repoMemoryWorktree || scopeKey !== record.compaction.scopeKey
+              || command.databasePath !== record.compaction.databasePath || command.cwd !== record.compaction.cwd) {
+              delete record.compaction;
+              save();
+            } else if (command.prompt.trim() && record.compaction.baseline) {
+              const native = await readCursorCompactionSnapshot(command);
+              if (native.ok) {
+                restorePersonalMemory = consumeCursorCompaction(record.compaction, {
+                  databasePath: command.databasePath, cwd: command.cwd, scopeKey,
+                }, native.snapshot);
+                save();
+              }
+            }
+          }
           if (reason) diagnostic(reason, command);
-          return { ...result, recorded: true };
+          return { ...result, recorded: true, ...(restorePersonalMemory ? { restorePersonalMemory: true } : {}) };
         });
       } catch {
         diagnostic("turn_state_unavailable", command);
@@ -319,6 +382,12 @@ export function createCursorMemoryHookRuntime(
       memory.close();
     },
   };
+}
+
+function compactionScopeKey(scope: RepositoryMemoryScope): string {
+  return cursorTextDigest(JSON.stringify([
+    scope.baseUserId, scope.effectiveUserId, scope.repositoryKey, scope.scopeKind, scope.boundWorkspaceRoot,
+  ]));
 }
 
 function traceForTurn(sessionId: string, turn: CursorStoredTurn): TraceContext | undefined {

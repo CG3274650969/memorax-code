@@ -17,7 +17,7 @@ const {
   personalMemoryReminderContext,
   MEMORY_IMPACT_REMINDER_CONTEXT,
 } = await import(pathToFileURL(join(commonRoot, "hooks", "memory-skill-reminder-policy.mjs")).href);
-const { evaluateMemorySkillReminder } = await import(pathToFileURL(join(commonRoot, "hooks", "memory-skill-reminder-hook.mjs")).href);
+const { evaluateMemorySkillReminder, markSupplementalReminderForSession } = await import(pathToFileURL(join(commonRoot, "hooks", "memory-skill-reminder-hook.mjs")).href);
 const { buildRepoUserProfilePreferencesContext } = await import(pathToFileURL(join(commonRoot, "repo-memory", "repo-user-profile-context.mjs")).href);
 const { buildRepoProcedureMemoryContext } = await import(pathToFileURL(join(commonRoot, "repo-memory", "repo-procedure-memory-context.mjs")).href);
 const { isRepoMemoryJobWorker } = await import(pathToFileURL(join(commonRoot, "repo-memory", "repo-memory-job-context.mjs")).href);
@@ -30,7 +30,7 @@ const sessionId = input.conversation_id;
 const turnId = input.generation_id;
 const cwd = Array.isArray(input.workspace_roots) && input.workspace_roots.length === 1
   ? absolutePath(input.workspace_roots[0]) : undefined;
-if (!["sessionStart", "beforeSubmitPrompt", "afterAgentResponse", "stop"].includes(event)
+if (!["sessionStart", "beforeSubmitPrompt", "preCompact", "afterAgentResponse", "stop"].includes(event)
   || !uuid(sessionId) || !cwd
   || (input.session_id !== undefined && input.session_id !== sessionId)
   || (event !== "sessionStart" && !uuid(turnId))) process.exit(0);
@@ -105,6 +105,8 @@ if (event === "sessionStart") {
       content: reminder.reminder.content, triggers: reminder.reminder.triggers,
     }, 500);
   }
+} else if (event === "preCompact") {
+  await post("/memory/pre-compact", identity);
 } else if (event === "afterAgentResponse") {
   if (typeof input.text !== "string" || !input.text) process.exit(0);
   await post("/memory/writeback", {
@@ -117,6 +119,12 @@ if (event === "sessionStart") {
 
 async function evaluateReminder(turnStart) {
   const worktree = absolutePath(turnStart.repoMemoryWorktree);
+  if (worktree && turnStart.restorePersonalMemory === true) {
+    markSupplementalReminderForSession({
+      adapterDir: "cursor", runtime: "cursor", memoraxCodeHome: home,
+      debugEnv: "MEMORAX_CODE_CURSOR_HOOK_DEBUG",
+    }, sessionId);
+  }
   const contextOptions = {
     adapterDir: "cursor", sessionKeyPrefix: "cursor", debugEnv: "MEMORAX_CODE_CURSOR_HOOK_DEBUG",
   };
@@ -127,6 +135,7 @@ async function evaluateReminder(turnStart) {
     additionalReminderContext: personalMemoryReminderContext("the `memorax-code` skill"),
     memoryImpactContext: MEMORY_IMPACT_REMINDER_CONTEXT,
     remindOnFirstTurn: true,
+    supplementalReminderAfterCompact: true,
     requireTranscriptPath: false,
     ...(worktree ? {
       buildPersonalMemoryContext: (hookInput) => buildRepoUserProfilePreferencesContext({

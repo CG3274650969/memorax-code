@@ -209,6 +209,54 @@ test("memory Hook HTTP routes reject invalid commands before dispatch and forwar
   }
 });
 
+test("pre-compact HTTP validates Cursor observation identity without ordinary turn dispatch", async () => {
+  const calls = [];
+  const result = { ok: true, recorded: true };
+  const dependencies = {
+    memoryService: {
+      recordPreCompact(command) {
+        calls.push(command);
+        return result;
+      },
+      recordTurnStart() { assert.fail("pre-compact must not register an ordinary turn"); },
+      writebackTurn() { assert.fail("pre-compact must not write back content"); },
+    },
+  };
+  const server = createServer(async (req, res) => {
+    const handled = await handleMemoryHookRequest(dependencies, new URL(req.url, "http://localhost"), req, res);
+    if (!handled) { res.writeHead(404); res.end(); }
+  });
+  const url = await listen(server);
+  const command = {
+    version: 1, client: "cursor", sessionId: randomUUID(), turnId: randomUUID(),
+    cwd: TEST_WORKSPACE, databasePath: join(TEST_WORKSPACE, "state.vscdb"),
+  };
+  const request = (body) => fetch(`${url}/memory/pre-compact`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+  try {
+    for (const fields of [
+      { client: "codex" }, { sessionId: undefined }, { turnId: undefined },
+      { cwd: "relative" }, { databasePath: undefined }, { databasePath: "state.vscdb" },
+      { transcriptPath: "transcript.jsonl" }, { trigger: "manual" }, { prompt: "Hook prompt" },
+    ]) {
+      const response = await request({ ...command, ...fields });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), { ok: false, error: "invalid memory Hook command" });
+      assert.deepEqual(calls, []);
+    }
+    const response = await request(command);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), result);
+    assert.deepEqual(calls, [command]);
+    const wrongMethod = await fetch(`${url}/memory/pre-compact`);
+    assert.equal(wrongMethod.status, 404);
+    assert.equal(calls.length, 1);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 function codeBuddyTurnId(sessionId, boundary, prompt) {
   return contentTurnId(sessionId, boundary, prompt);
 }

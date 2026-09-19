@@ -10,6 +10,9 @@ const MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024;
 const MAX_FIELDS = 200_000;
 const MAX_TURNS = 4096;
 const MAX_STEPS = 32_768;
+const MAX_COMPACTION_MESSAGES = 32_768;
+const MAX_ROOT_MESSAGES = 4096;
+const MAX_SUMMARY_ARCHIVES = 1024;
 const require = createRequire(import.meta.url);
 
 export type CursorDatabaseFailureReason =
@@ -43,7 +46,22 @@ export type CursorDatabaseSnapshot = Readonly<{
 }>;
 export type CursorDatabaseSnapshotResult =
   | Readonly<{ ok: true; snapshot: CursorDatabaseSnapshot }>
-  | Readonly<{ ok: false; reason: CursorDatabaseFailureReason; retryable: boolean }>;
+  | CursorDatabaseFailure;
+export type CursorCompactionSnapshot = Readonly<{
+  databaseIdentity: string;
+  rootMessageIds: readonly string[];
+  archives: readonly Readonly<{
+    id: string;
+    summaryMessageId: string;
+    summarizedMessageIds: readonly string[];
+  }>[];
+}>;
+export type CursorCompactionSnapshotResult =
+  | Readonly<{ ok: true; snapshot: CursorCompactionSnapshot }>
+  | CursorDatabaseFailure;
+
+type CursorDatabaseFailure = Readonly<{ ok: false; reason: CursorDatabaseFailureReason; retryable: boolean }>;
+type SnapshotInput = { databasePath: string; sessionId: string };
 
 type SqliteDatabase = {
   exec(sql: string): unknown;
@@ -58,10 +76,54 @@ type Budget = { bytes: number; fields: number; steps: number };
 // content variants remain opaque; UI bubbles and Hook text are not fallbacks.
 const USER_FIELDS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 24, 25, 26]);
 
-export async function readCursorDatabaseSnapshot(input: {
-  databasePath: string;
-  sessionId: string;
-}): Promise<CursorDatabaseSnapshotResult> {
+export async function readCursorDatabaseSnapshot(input: SnapshotInput): Promise<CursorDatabaseSnapshotResult> {
+  return readNativeSnapshot(input, ({ composer, stateBytes, state, blob, budget }) => {
+    const latestGenerationId = composer.latestChatGenerationUUID;
+    if (latestGenerationId !== undefined && (typeof latestGenerationId !== "string" || !UUID.test(latestGenerationId))) fail("database_native_format_invalid");
+    // Only the native active branch's explicit turn refs are content. Other
+    // state fields, including summary archives and additive metadata, are not.
+    const refs = repeatedBytes(state, 8);
+    if (refs.length > MAX_TURNS) fail("database_snapshot_too_large");
+    return {
+      stateHash: hash(stateBytes),
+      ...(latestGenerationId === undefined ? {} : { latestGenerationId }),
+      turns: refs.map((ref) => decodeTurn(ref, blob, budget)),
+    };
+  });
+}
+
+export async function readCursorCompactionSnapshot(input: SnapshotInput): Promise<CursorCompactionSnapshotResult> {
+  return readNativeSnapshot(input, ({ databaseIdentity, state, blob, budget }) => {
+    // ConversationStateStructure fields 1 and 13 reference prompt messages and
+    // ConversationSummaryArchive blobs. Archive field 2 is summary text and is
+    // deliberately ignored; message blobs are never loaded by this projection.
+    const rootMessageIds = uniqueReferences(repeatedBytes(state, 1), MAX_ROOT_MESSAGES);
+    const archiveRefs = repeatedBytes(state, 13);
+    const archiveIds = uniqueReferences(archiveRefs, MAX_SUMMARY_ARCHIVES);
+    const summaryIds = new Set<string>();
+    let messageCount = 0;
+    const archives = archiveRefs.map((ref, index) => {
+      const archive = wire(blob(ref), budget);
+      const summaryMessageId = reference(requiredBytes(archive, 4));
+      const summarizedMessageIds = uniqueReferences(repeatedBytes(archive, 1), MAX_COMPACTION_MESSAGES);
+      if ((messageCount += summarizedMessageIds.length) > MAX_COMPACTION_MESSAGES) fail("database_snapshot_too_large");
+      if (summaryIds.has(summaryMessageId) || summarizedMessageIds.length === 0
+        || summarizedMessageIds.includes(summaryMessageId)) fail("database_native_format_invalid");
+      summaryIds.add(summaryMessageId);
+      return { id: archiveIds[index], summaryMessageId, summarizedMessageIds };
+    });
+    return { databaseIdentity, rootMessageIds, archives };
+  });
+}
+
+async function readNativeSnapshot<Snapshot>(input: SnapshotInput, decode: (native: {
+  databaseIdentity: string;
+  composer: Record<string, unknown>;
+  stateBytes: Buffer;
+  state: Fields;
+  blob: (ref: Buffer) => Buffer;
+  budget: Budget;
+}) => Snapshot): Promise<Readonly<{ ok: true; snapshot: Snapshot }> | CursorDatabaseFailure> {
   if (!isAbsolute(input.databasePath) || /[\0\r\n]/.test(input.databasePath) || !UUID.test(input.sessionId)) {
     return failure("database_path_invalid");
   }
@@ -97,15 +159,9 @@ export async function readCursorDatabaseSnapshot(input: {
     catch { fail("database_native_format_invalid"); }
     if (!isRecord(composer)) fail("database_native_format_invalid");
     if (composer.composerId !== undefined && composer.composerId !== input.sessionId) fail("database_native_format_invalid");
-    const latestGenerationId = composer.latestChatGenerationUUID;
-    if (latestGenerationId !== undefined && (typeof latestGenerationId !== "string" || !UUID.test(latestGenerationId))) fail("database_native_format_invalid");
     if (composer.conversationState === undefined || composer.conversationState === null) fail("database_state_missing");
     const stateBytes = encodedState(composer.conversationState);
     const state = wire(stateBytes, budget);
-    // Only the native active branch's explicit turn refs are content. Other
-    // state fields, including summary archives and additive metadata, are not.
-    const refs = repeatedBytes(state, 8);
-    if (refs.length > MAX_TURNS) fail("database_snapshot_too_large");
     const cache = new Map<string, Buffer>();
     function blob(ref: Buffer): Buffer {
       const id = reference(ref);
@@ -117,14 +173,11 @@ export async function readCursorDatabaseSnapshot(input: {
       cache.set(id, content);
       return content;
     }
-    const turns = refs.map((ref) => decodeTurn(ref, blob, budget));
+    const databaseIdentity = hash(Buffer.from(JSON.stringify([path, String(before.dev), String(before.ino)])));
+    const snapshot = decode({ databaseIdentity, composer, stateBytes, state, blob, budget });
     const after = statSync(path, { bigint: true });
     if (after.dev !== before.dev || after.ino !== before.ino || realpathSync(input.databasePath) !== path) fail("database_replaced");
-    return { ok: true, snapshot: {
-      stateHash: hash(stateBytes),
-      ...(latestGenerationId === undefined ? {} : { latestGenerationId }),
-      turns,
-    } };
+    return { ok: true, snapshot };
   } catch (error) {
     if (error instanceof SnapshotFailure) return failure(error.reason);
     if (isRecord(error) && error.code === "ERR_SQLITE_ERROR"
@@ -256,6 +309,12 @@ function reference(value: Buffer): string {
   if (value.length < 1 || value.length > 64) fail("database_native_format_invalid");
   return value.toString("hex");
 }
+function uniqueReferences(values: Buffer[], limit: number): string[] {
+  if (values.length > limit) fail("database_snapshot_too_large");
+  const ids = values.map(reference);
+  if (new Set(ids).size !== ids.length) fail("database_native_format_invalid");
+  return ids;
+}
 function encodedState(value: unknown): Buffer {
   if (typeof value !== "string") return fail("database_native_format_invalid");
   if (!value.startsWith("~")) return hex(value);
@@ -281,6 +340,6 @@ class SnapshotFailure extends Error {
   constructor(readonly reason: CursorDatabaseFailureReason) { super(reason); }
 }
 function fail(reason: CursorDatabaseFailureReason): never { throw new SnapshotFailure(reason); }
-function failure(reason: CursorDatabaseFailureReason): CursorDatabaseSnapshotResult {
+function failure(reason: CursorDatabaseFailureReason): CursorDatabaseFailure {
   return { ok: false, reason, retryable: ["database_unavailable", "database_session_missing", "database_state_missing", "database_blob_missing"].includes(reason) };
 }

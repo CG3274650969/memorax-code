@@ -166,8 +166,11 @@ with built-in SQLite (Node.js 24 recommended). It supports ordinary prompts,
 edited resends, and continuations bound to an observed preceding turn; interrupted
 or ambiguously correlated content is skipped. Prompt Hooks inject trusted User
 Profile preferences on the first eligible turn and Procedure Memory on the
-configured reminder cadence. Post-compaction restoration and automatic prompt
-retrieval are not enabled in this integration. See
+configured reminder cadence. After a recorded compaction is verified against the
+native database, the next nonempty, registered prompt restores Profile and personal
+reminders; Procedure keeps its normal cadence. Missing evidence skips recovery,
+and restoration during the same continuing task is not guaranteed. Automatic
+prompt retrieval remains disabled. See
 [Cursor configuration](docs/configuration.md#cursor-integration-paths).
 
 Open a project, start a new client session, and send one prompt. Then run
