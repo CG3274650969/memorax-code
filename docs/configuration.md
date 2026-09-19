@@ -468,8 +468,8 @@ but skip Cursor's database-backed automatic Add and compaction restoration.
 
 Restart or refresh Cursor and open a new conversation after setup.
 `memorax-code-cursor status --json` reports `cursorHooks.status` as `unverified`
-until a managed Hook runs, then `observed`. One workspace root is required;
-ambiguous multi-root workspaces are skipped.
+until a managed Hook runs, then `observed`. Turn-bound memory operations require one workspace root;
+ambiguous or missing roots skip those operations, while session-start guidance can still be injected.
 
 `sessionStart` injects the shared Skill rules and explicit CLI context through
 Cursor's native `additional_context` and `env` fields. The environment is only

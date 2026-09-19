@@ -35,8 +35,9 @@ const sessionId = input.conversation_id ?? input.session_id;
 const turnId = input.generation_id;
 const cwd = Array.isArray(input.workspace_roots) && input.workspace_roots.length === 1
   ? absolutePath(input.workspace_roots[0]) : undefined;
+const requiresWorkspace = event !== "sessionStart";
 if (!["sessionStart", "beforeSubmitPrompt", "preCompact", "afterAgentResponse", "stop"].includes(event)
-  || !uuid(sessionId) || !cwd
+  || !uuid(sessionId) || (requiresWorkspace && !cwd)
   || (input.session_id !== undefined && input.session_id !== sessionId)
   || (event !== "sessionStart" && !uuid(turnId))) process.exit(0);
 const transcriptPath = absolutePath(input.transcript_path);

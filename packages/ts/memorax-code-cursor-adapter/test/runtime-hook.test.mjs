@@ -111,6 +111,19 @@ test("Cursor sessionStart accepts the documented session_id alias", async () => 
   } finally { await fixture.close(); }
 });
 
+test("Cursor sessionStart still injects generic context without a workspace", async () => {
+  const fixture = await createFixture();
+  try {
+    const result = await runHook(fixture, { hook_event_name: "sessionStart",
+      conversation_id: undefined, session_id: sessionId, workspace_roots: [],
+      generation_id: undefined, transcript_path: null });
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.match(output.additional_context, /the \`memorax-code\` skill/);
+    assert.equal(fixture.requests.length, 0);
+  } finally { await fixture.close(); }
+});
+
 test("Cursor rejects ambiguous native identities, multiroot workspaces and unsupported events", async () => {
   const fixture = await createFixture();
   try {
