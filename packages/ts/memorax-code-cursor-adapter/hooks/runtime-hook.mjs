@@ -27,7 +27,11 @@ if (isRepoMemoryJobWorker()) process.exit(0);
 
 const input = await readJsonStdin();
 const event = input.hook_event_name;
-const sessionId = input.conversation_id;
+// Cursor documents `session_id` for sessionStart/sessionEnd and
+// `conversation_id` in the common Hook fields. Treat them as aliases so a
+// client version that omits the common field still receives the session
+// bootstrap context and can correlate later events.
+const sessionId = input.conversation_id ?? input.session_id;
 const turnId = input.generation_id;
 const cwd = Array.isArray(input.workspace_roots) && input.workspace_roots.length === 1
   ? absolutePath(input.workspace_roots[0]) : undefined;

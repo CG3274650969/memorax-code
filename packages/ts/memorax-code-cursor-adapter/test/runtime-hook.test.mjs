@@ -96,6 +96,21 @@ test("Cursor sessionStart uses only native output fields and explicit per-comman
   } finally { await fixture.close(); }
 });
 
+test("Cursor sessionStart accepts the documented session_id alias", async () => {
+  const fixture = await createFixture();
+  try {
+    const result = await runHook(fixture, { hook_event_name: "sessionStart",
+      conversation_id: undefined, session_id: sessionId, generation_id: undefined, transcript_path: null });
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.deepEqual(output.env, {
+      MEMORAX_CODE_MEMORY_CLI_TRACE_CLIENT: "cursor",
+      MEMORAX_CODE_MEMORY_CLI_TRACE_SESSION_ID: sessionId,
+    });
+    assert.match(output.additional_context, /MEMORAX_CODE_MEMORY_CLI_TRACE_SESSION_ID=/);
+  } finally { await fixture.close(); }
+});
+
 test("Cursor rejects ambiguous native identities, multiroot workspaces and unsupported events", async () => {
   const fixture = await createFixture();
   try {
