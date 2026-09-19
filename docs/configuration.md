@@ -477,8 +477,10 @@ guaranteed to reach later Hooks. When the agent runs `memorax-cli`, it must set
 `MEMORAX_CODE_MEMORY_CLI_TRACE_CLIENT=cursor` and
 `MEMORAX_CODE_MEMORY_CLI_TRACE_SESSION_ID` to the conversation ID supplied in
 that context, using the command's shell environment. Shell inheritance is not
-assumed. The Skill provides explicit Search, manual Add, and Repo Memory work.
-This integration does not run background Repo Memory maintenance.
+assumed. The Skill provides explicit Search, manual Add, and Repo Memory work. After an
+accepted turn-start with a Backend-authorized Git worktree, Cursor also starts the
+supervised missing-bundle build when its headless Agent CLI is available. The
+foreground Hook remains successful when that optional worker is unavailable.
 
 After the Backend confirms turn registration, `beforeSubmitPrompt` returns shared Skill
 reminders and local personal-memory context through native `additional_context`.
@@ -787,8 +789,9 @@ writeback content.
 Cursor supplies a generic reminder at session start and uses the shared first-turn
 and periodic cadence after the Backend confirms turn registration. It injects trusted User
 Profile preferences on the first eligible turn and Procedure Memory with that
-cadence, but does not provide post-compaction restoration. Its Skill can also
-read authorized repository memory explicitly.
+cadence, and its Skill can also read authorized repository memory explicitly. After
+an accepted turn-start with an authorized Git worktree, Cursor schedules the
+supervised missing-bundle build described below.
 
 The repository-update fields below belong in `[memory.repo_update]`.
 
@@ -802,7 +805,7 @@ Supported policies are `every-commit`, `commit-count`, `daily`,
 `pull-request`, `pull-request-or-daily`, and `adaptive`. Invalid policy values
 fall back to `adaptive`.
 
-In Codex, Claude Code, CodeBuddy/WorkBuddy, DSH, and OpenCode, the first
+In Codex, Claude Code, CodeBuddy/WorkBuddy, DSH, OpenCode, and Cursor, the first
 eligible prompt starts a background build only when the Backend has authorized
 a Git worktree and that worktree has no `.repo_memory/PROFILE.md`. If the
 Backend or workspace authority is unavailable, the client integration skips
@@ -819,14 +822,19 @@ the grace period before the worker force-terminates a client that ignores
 `codebuddy_timeout` (or `<runner>_timeout`) in the job state, so a stalled
 headless client cannot leave an active job and repository marker indefinitely.
 
-A relevant repo-read runs supervised maintenance in the five headless-capable
+A relevant repo-read runs supervised maintenance in the six headless-capable
 client integrations. The configured policy may select a build, update, or
 no-op. DSH maintenance requires an enabled, managed Profile that includes
 `@deepseek-ai/dsh-headless`. OpenCode executes the job through its active local
 server. Desktop-only installations do not require a standalone `opencode`
 executable in `PATH`. Trae users can invoke the Skill explicitly, but Trae is
-not an automatic maintenance runner. Cursor also uses Skill-driven Repo Memory
-without an automatic maintenance runner.
+not an automatic maintenance runner. Cursor uses a local Agent CLI worker with the same bounded supervisor; the worker
+explicitly loads the installed MemoraX Skill and requires separate Cursor CLI
+authentication. A desktop Cursor login alone does not prove that the headless
+command is available. Set `MEMORAX_CODE_CURSOR_AGENT_COMMAND` or
+`CURSOR_AGENT_COMMAND` when the executable is not discoverable as `agent` or
+`cursor-agent`; an explicit command observed during setup is retained in the
+private Cursor runtime generation.
 
 ## Default Search/Add diagnostics
 

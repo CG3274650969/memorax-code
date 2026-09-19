@@ -141,6 +141,7 @@ export function requiredNpmPackagePaths(manifest) {
     "lib/memorax-code-codebuddy-adapter/hooks/runtime-hook.mjs",
     "lib/memorax-code-trae-adapter/hooks/runtime-hook.mjs",
     "lib/memorax-code-cursor-adapter/hooks/runtime-hook.mjs",
+    "lib/memorax-code-cursor-adapter/hooks/repo-memory-job.mjs",
   ];
 }
 

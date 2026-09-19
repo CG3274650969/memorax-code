@@ -40,6 +40,13 @@ test("Cursor installation owns only its flat Hook entries and materialized share
     assert.deepEqual(JSON.parse(await readFile(join(installed.skillPath, ".memorax-code-package.json"), "utf8")), {
       version: 1, memoraxCodeCommand: fixture.options.memoraxCodeCommand,
     });
+    const generationRoot = join(installed.installPath, "..");
+    assert.equal(await readFile(join(generationRoot, "hooks", "repo-memory-job.mjs"), "utf8"), "// repo memory job fixture\n");
+    assert.deepEqual(JSON.parse(await readFile(join(generationRoot, "plugin.json"), "utf8")), {
+      "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+      name: "memorax-code", description: "Persistent coding memory for Cursor.",
+    });
+    assert.equal(await readFile(join(generationRoot, "skills", "memorax-code", "SKILL.md"), "utf8"), "# Canonical Skill fixture\n");
     const hooks = await fixture.hooks();
     assert.equal(hooks.version, 1);
     assert.deepEqual(hooks.custom, { thirdPartyExtensibilityEnabled: true });
@@ -213,6 +220,7 @@ async function createFixture() {
     cursorHome, memoraxCodeHome: join(root, "state"),
     lifecycleLockTarget: join(root, "locks", "cursor-lifecycle"),
     runtimeHookSourcePath: join(source, "runtime-hook.mjs"),
+    repoMemoryJobSourcePath: join(source, "repo-memory-job.mjs"),
     runtimeObservationSourcePath: join(source, "runtime-observation.mjs"),
     commonSourcePath: join(source, "common"), skillSourcePath: join(source, "skill"),
     memoraxCodeCommand: join(source, "cli.mjs"),
@@ -221,6 +229,7 @@ async function createFixture() {
     .map(path => mkdir(path, { recursive: true })));
   await Promise.all([
     writeFile(options.runtimeHookSourcePath, "// runtime fixture\n"),
+    writeFile(options.repoMemoryJobSourcePath, "// repo memory job fixture\n"),
     writeFile(options.runtimeObservationSourcePath, "// observation fixture\n"),
     writeFile(options.memoraxCodeCommand, "// never executed\n"),
     writeFile(join(options.commonSourcePath, "common.mjs"), "// shared runtime\n"),

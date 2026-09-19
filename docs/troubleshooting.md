@@ -769,7 +769,10 @@ copy generated runtime files or edit entries containing
 Trae currently provides no stable raw Session or headless CLI. Automatic
 writeback therefore requires a matching `UserPromptSubmit` and `Stop` Hook
 pair, and automatic background Repo Memory jobs are not available. Explicit
-Search/Add and Skill-driven Repo Memory remain available.
+Search/Add and Skill-driven Repo Memory remain available. Cursor's optional
+background build has a separate prerequisite: install and authenticate the
+headless Agent CLI (`agent` or `cursor-agent`); without it, the foreground Hook
+continues normally and the Repo Memory build must be started through the Skill.
 
 ## DeepSeek Harness Profile integration is inactive
 

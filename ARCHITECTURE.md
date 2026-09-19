@@ -775,8 +775,8 @@ must use the Backend-resolved worktree rather than adapter-local workspace
 input. Trae consumes existing Repo Memory context and exposes the shared Skill,
 but does not schedule background work because no supported headless Trae worker
 exists. Cursor provides session-start Skill guidance, trusted User Profile and
-Procedure Memory context, and explicit Repo Memory operations without scheduling
-maintenance.
+Procedure Memory context, and schedules the same supervised missing-bundle build
+through its headless Agent CLI when that CLI is available.
 
 The Backend owns the TypeScript Repo Memory collector, delta detector, provider
 facets, and validator under `src/repo-memory`, exposed through
@@ -821,7 +821,7 @@ reminder Hook instead resolves the Git root from Hook `cwd`, falling back to
 its local workspace registry when `cwd` is absent, without waiting for a
 Backend worktree result.
 
-A relevant repo-read can invoke supervised maintenance in the five
+A relevant repo-read can invoke supervised maintenance in the six
 headless-capable client integrations. The runner validates the bundle and
 selects a background build, update, or no-op according to policy. DSH
 maintenance runs through an enabled, managed headless-capable Profile. For
@@ -835,7 +835,9 @@ database and close it afterward. HTTP/session-response failures and later
 prompt failures do not select this fallback.
 Desktop-only installations with a reachable server do not require a standalone
 OpenCode CLI. Trae remains outside this supervised path until it exposes a
-suitable headless execution authority.
+suitable headless execution authority. Cursor's worker uses the installed Agent
+Plugin-shaped runtime generation and fails closed when its headless CLI is absent
+or unauthenticated.
 
 ## 4. Backend Modular Monolith
 

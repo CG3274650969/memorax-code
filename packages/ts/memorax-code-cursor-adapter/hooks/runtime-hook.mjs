@@ -12,6 +12,7 @@ const commonRoot = join(runtimeRoot, "memorax-code-adapter-common", "src");
 const { resolveBackendConnection } = await import(pathToFileURL(join(commonRoot, "backend-connection.mjs")).href);
 const { postBackendCommand } = await import(pathToFileURL(join(commonRoot, "backend-command.mjs")).href);
 const { ensureBackendAvailable } = await import(pathToFileURL(join(commonRoot, "hooks", "ensure-backend-runner.mjs")).href);
+const { scheduleMissingRepoMemoryBuild } = await import(pathToFileURL(join(commonRoot, "repo-memory", "repo-memory-auto-build.mjs")).href);
 const {
   memorySkillReminderContext,
   personalMemoryReminderContext,
@@ -93,6 +94,14 @@ if (event === "sessionStart") {
   // Empty native prompts identify Continue; Backend retains the skip decision.
   if (typeof input.prompt !== "string") process.exit(0);
   const turnStart = await post("/memory/turn-start", { ...identity, prompt: input.prompt });
+  const repoMemoryWorktree = absolutePath(turnStart?.repoMemoryWorktree);
+  if (turnStart?.ok === true && turnStart.recorded === true && repoMemoryWorktree) {
+    scheduleMissingRepoMemoryBuild(repoMemoryWorktree, {
+      debugEnv: "MEMORAX_CODE_CURSOR_HOOK_DEBUG",
+      env: { ...process.env, MEMORAX_CODE_HOME: home },
+      pluginRoot: runtimeRoot,
+    });
+  }
   const reminder = turnStart?.ok === true && turnStart.recorded === true && input.prompt.trim()
     ? await evaluateReminder(turnStart) : undefined;
   process.stdout.write(`${JSON.stringify({

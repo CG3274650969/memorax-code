@@ -390,6 +390,7 @@ function runHook(fixture, input, env = {}) {
         APPDATA: join(fixture.root, "appdata"), LOCALAPPDATA: join(fixture.root, "localappdata"),
         TMPDIR: fixture.root, TEMP: fixture.root, TMP: fixture.root,
         MEMORAX_CODE_HOME: fixture.home, CURSOR_HOME: fixture.cursorHome,
+        MEMORAX_CODE_CURSOR_AGENT_COMMAND: join(fixture.root, "missing-cursor-agent"),
         MEMORAX_CODE_CURSOR_ENSURE_BACKEND: "false",
         MEMORAX_CODE_BACKEND_URL: `http://127.0.0.1:${fixture.server.address().port}`,
         ...env,

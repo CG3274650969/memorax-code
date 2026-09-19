@@ -15,6 +15,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:p
 import { fileURLToPath } from "node:url";
 import {
   atomicWriteJson,
+  atomicWriteText,
   readAdapterState,
   readJsonFile,
   stringOption,
@@ -43,6 +44,11 @@ const STATE_VERSION = 1;
 const HOOK_MARKER = "--memorax-code-cursor-hook-v1";
 const REQUIRED_EVENTS = ["sessionStart", "beforeSubmitPrompt", "preCompact", "afterAgentResponse", "stop"];
 const SKILL_PACKAGE_METADATA = ".memorax-code-package.json";
+const CURSOR_AGENT_PLUGIN_MANIFEST = JSON.stringify({
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  name: "memorax-code",
+  description: "Persistent coding memory for Cursor.",
+}, null, 2) + "\n";
 
 export async function enableCursorAdapter(options = {}) {
   const paths = resolvePaths(options);
@@ -81,6 +87,10 @@ async function enableCursorAdapterUnlocked(paths, options) {
     return failure("database_path_invalid", paths,
       new Error("MEMORAX_CODE_CURSOR_DATABASE_PATH must be an absolute path without control characters"), "enable", "runtime-stage");
   }
+  const cursorAgentCommand = stringOption(options.cursorAgentCommand)
+    ?? stringOption(process.env.MEMORAX_CODE_CURSOR_AGENT_COMMAND)
+    ?? stringOption(process.env.CURSOR_AGENT_COMMAND)
+    ?? stringOption(previousMetadata?.cursorAgentCommand);
   // Hook recovery forwards npm through MEMORAX_CODE_NPM_EXEC_PATH. A direct
   // lifecycle command may have neither variable, so retain a still-valid entrypoint.
   const npmExecPath = absoluteRegularFile(options.npmExecPath
@@ -91,6 +101,7 @@ async function enableCursorAdapterUnlocked(paths, options) {
     version: 1,
     ...(memoraxCodeCommand ? { memoraxCodeCommand } : {}),
     ...(npmExecPath ? { npmExecPath } : {}),
+    ...(cursorAgentCommand ? { cursorAgentCommand } : {}),
     memoraxCodeHome: paths.memoraxCodeHome,
     cursorHome: paths.cursorHome,
     ...(databasePath ? { databasePath } : {}),
@@ -417,6 +428,7 @@ function resolvePaths(options) {
     skillPath: resolve(options.skillPath ?? cursorSkillPath(cursorHome)),
     runtimeRoot: resolve(options.runtimeRoot ?? cursorRuntimeRoot(memoraxCodeHome)),
     runtimeHookSourcePath: resolve(options.runtimeHookSourcePath ?? join(ADAPTER_ROOT, "hooks", "runtime-hook.mjs")),
+    repoMemoryJobSourcePath: resolve(options.repoMemoryJobSourcePath ?? join(ADAPTER_ROOT, "hooks", "repo-memory-job.mjs")),
     runtimeObservationSourcePath: resolve(options.runtimeObservationSourcePath ?? join(ADAPTER_ROOT, "src", "runtime-observation.mjs")),
     nativeDatabasePathSourcePath: resolve(options.nativeDatabasePathSourcePath ?? join(ADAPTER_ROOT, "src", "native-database-path.mjs")),
     commonSourcePath: resolve(options.commonSourcePath ?? join(ADAPTER_ROOT, "..", "memorax-code-adapter-common", "src")),
@@ -464,6 +476,7 @@ function validateState(state, paths) {
 function validateSources(paths) {
   for (const [name, path] of [
     ["runtime_hook", paths.runtimeHookSourcePath],
+    ["repo_memory_job", paths.repoMemoryJobSourcePath],
     ["runtime_observation", paths.runtimeObservationSourcePath],
     ["native_database_path", paths.nativeDatabasePathSourcePath],
   ]) {
@@ -482,7 +495,10 @@ function materializeRuntimeGeneration(paths, generationPath, runtimeDigest, runt
   if (existsSync(generationPath)) {
     const record = readJsonFile(join(generationPath, "generation.json"));
     if (record?.unreadable || record?.value?.runtimeDigest !== runtimeDigest
-      || !regularFile(join(generationPath, "hooks", "runtime-hook.mjs"))) {
+      || !regularFile(join(generationPath, "hooks", "runtime-hook.mjs"))
+      || !regularFile(join(generationPath, "hooks", "repo-memory-job.mjs"))
+      || !regularFile(join(generationPath, "plugin.json"))
+      || !regularFile(join(generationPath, "skills", "memorax-code", "SKILL.md"))) {
       throw attachDeploymentFailure(new Error("Cursor runtime generation is invalid"), "runtime-stage", { failureReason: "invalid_record" });
     }
     return;
@@ -493,10 +509,14 @@ function materializeRuntimeGeneration(paths, generationPath, runtimeDigest, runt
     mkdirSync(paths.runtimeRoot, { recursive: true, mode: 0o700 });
     mkdirSync(join(temporaryPath, "hooks"), { recursive: true, mode: 0o700 });
     mkdirSync(join(temporaryPath, "src"), { recursive: true, mode: 0o700 });
+    mkdirSync(join(temporaryPath, "skills"), { recursive: true, mode: 0o700 });
     cpSync(paths.runtimeHookSourcePath, join(temporaryPath, "hooks", "runtime-hook.mjs"));
+    cpSync(paths.repoMemoryJobSourcePath, join(temporaryPath, "hooks", "repo-memory-job.mjs"));
     cpSync(paths.runtimeObservationSourcePath, join(temporaryPath, "src", "runtime-observation.mjs"));
     cpSync(paths.nativeDatabasePathSourcePath, join(temporaryPath, "src", "native-database-path.mjs"));
     cpSync(paths.commonSourcePath, join(temporaryPath, "memorax-code-adapter-common", "src"), { recursive: true });
+    cpSync(paths.skillSourcePath, join(temporaryPath, "skills", "memorax-code"), { recursive: true });
+    atomicWriteText(join(temporaryPath, "plugin.json"), CURSOR_AGENT_PLUGIN_MANIFEST);
     atomicWriteJson(join(temporaryPath, "generation.json"), { version: 1, runtimeDigest });
     atomicWriteJson(join(temporaryPath, ".memorax-code-package.json"), {
       ...runtimeMetadata,
@@ -623,9 +643,14 @@ function materializeDirectory(source, destination, memoraxCodeCommand) {
 function runtimeSourceDigest(paths, runtimeMetadata) {
   const hash = createHash("sha256");
   hashFile(hash, paths.runtimeHookSourcePath, "hooks/runtime-hook.mjs");
+  hashFile(hash, paths.repoMemoryJobSourcePath, "hooks/repo-memory-job.mjs");
   hashFile(hash, paths.runtimeObservationSourcePath, "src/runtime-observation.mjs");
   hashFile(hash, paths.nativeDatabasePathSourcePath, "src/native-database-path.mjs");
   hashDirectory(hash, paths.commonSourcePath, "memorax-code-adapter-common/src");
+  hashDirectory(hash, paths.skillSourcePath, "skills/memorax-code");
+  hash.update("plugin.json\0");
+  hash.update(CURSOR_AGENT_PLUGIN_MANIFEST);
+  hash.update("\0");
   // Recovery paths can change without source changes. Include the metadata
   // in the identity so existing runtime generations remain immutable.
   hash.update(".memorax-code-package.json\0");
