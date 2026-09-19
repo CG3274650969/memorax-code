@@ -686,10 +686,12 @@ integrations you want to retain. Cursor uses `CURSOR_HOME`, otherwise `~/.cursor
 `hooks.json`, plus `skills/memorax-code/`. It does not change Cursor's third-party
 integration setting or require a Claude Code installation.
 
-Restart or refresh Cursor, open a new conversation in a single-root workspace,
-and send a prompt. `cursorHooks.status` changes from `unverified` to `observed`
-when a managed Hook runs. Seeing an inherited Claude Skill alone does not prove
-that the native Cursor integration is configured. For `hooks_invalid`, repair
+Restart or refresh Cursor, open a new conversation with either a single-root
+workspace or no folder selected, and send a prompt. A no-folder conversation is
+the projectless `General` scope and does not require a physical workspace root.
+`cursorHooks.status` changes from `unverified` to `observed` when a managed Hook
+runs. Seeing an inherited Claude Skill alone does not prove that the native
+Cursor integration is configured. For `hooks_invalid`, repair
 the existing JSON before rerunning start. For `skill_conflict`, preserve or move
 the unmanaged Skill deliberately before installing the managed one.
 
@@ -912,8 +914,9 @@ worktrees share the remote repository identity; ordinary non-Git workspaces use
 the normalized folder name. Recognized default chat directories share
 `General`. Resolution never falls back to the bare base user ID.
 
-A live Codex, Claude Code, DSH, or OpenCode session remains pinned to the
-repository or local workspace resolved at the start of the session. Starting
+A live Codex, Claude Code, DSH, OpenCode, or Cursor session remains pinned to
+the repository or local workspace resolved at the start of the session. A
+Cursor no-folder session remains in its projectless `General` scope. Starting
 the client from a parent workspace and then entering a nested Git repository
 does not rebind the session. The only in-session scope upgrade is from a direct
 `.git` directory whose internal metadata was malformed or incomplete to a
@@ -939,8 +942,9 @@ session from the target repository or local workspace and verify that its
 `.git` metadata is readable and valid. These failures stop Search or Add before
 any request is sent to MemoraX.
 
-Recognized default chat directories in Codex, WorkBuddy, and OpenCode
-intentionally share `General` under the same Base User ID. Check the
+Recognized default chat directories or contexts in Codex, WorkBuddy, OpenCode, and Cursor
+intentionally share `General` under the same Base User ID. Cursor's no-folder
+conversation is the projectless form of this scope. Check the
 [directory rules](configuration.md#memory-scope) if the scope is unexpected;
 ordinary selected directories and verified Git repositories keep their normal
 scope. Existing memories under `Codex-General` or the previous default-folder

@@ -142,7 +142,8 @@ export function createCursorMemoryHookRuntime(
       assistantTimestamp: turn.responseObservedAt, assistantTimestampSource: "observed",
       traceContext,
       resolveRepositoryMemory: () => memory.resolveRepositoryMemory({
-        sessionId, cwd: turn.cwd, restoreScope: async () => record.repositoryScope,
+        sessionId, cwd: turn.cwd, workspaceKind: turn.workspaceKind,
+        restoreScope: async () => record.repositoryScope,
       }),
     });
     if (!completed.scheduled) {
@@ -178,17 +179,18 @@ export function createCursorMemoryHookRuntime(
         return await withCursorSessionRecord(stateOptions(command.sessionId), async (record, save) => {
           const active = record.active;
           if (!active) return skipped("start_missing");
-          if (active.databasePath !== command.databasePath || active.cwd !== command.cwd) {
+          if (active.databasePath !== command.databasePath || active.cwd !== command.cwd
+            || active.workspaceKind !== command.workspaceKind) {
             delete record.compaction;
             save();
             return skipped("database_or_workspace_changed");
           }
           const repositoryMemory = await memory.resolveRepositoryMemory({
-            sessionId: command.sessionId, cwd: command.cwd,
+            sessionId: command.sessionId, cwd: command.cwd, workspaceKind: command.workspaceKind,
             restoreScope: async () => record.repositoryScope,
           });
           const scope = repositoryMemory.ok ? repositoryMemory.memory.scope : undefined;
-          if (!scope || !resolvedRepoMemoryWorktree(repositoryMemory) || !record.repositoryScope
+          if (!command.cwd || !scope || !resolvedRepoMemoryWorktree(repositoryMemory) || !record.repositoryScope
             || compactionScopeKey(scope) !== compactionScopeKey(record.repositoryScope)) {
             delete record.compaction;
             save();
@@ -237,7 +239,8 @@ export function createCursorMemoryHookRuntime(
           let reason: string | undefined;
           if (!command.prompt.trim()) {
             if (!previous || !previous.stopStatus || previous.state === "blocked"
-              || previous.databasePath !== command.databasePath || previous.cwd !== command.cwd) {
+              || previous.databasePath !== command.databasePath || previous.cwd !== command.cwd
+              || previous.workspaceKind !== command.workspaceKind) {
               reason = "continuation_user_unbound";
             } else {
               for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -262,12 +265,13 @@ export function createCursorMemoryHookRuntime(
             });
           }
           const repositoryMemory = await memory.resolveRepositoryMemory({
-            sessionId: command.sessionId, cwd: command.cwd,
+            sessionId: command.sessionId, cwd: command.cwd, workspaceKind: command.workspaceKind,
             restoreScope: async () => record.repositoryScope,
           });
           if (repositoryMemory.ok && repositoryMemory.memory.scope) record.repositoryScope = repositoryMemory.memory.scope;
           const turn: CursorStoredTurn = {
-            turnId: command.turnId, cwd: command.cwd, createdAt,
+            turnId: command.turnId, ...(command.cwd ? { cwd: command.cwd } : {}),
+            ...(command.workspaceKind ? { workspaceKind: command.workspaceKind } : {}), createdAt,
             promptDigest: cursorTextDigest(command.prompt),
             ...(command.transcriptPath ? { transcriptPath: command.transcriptPath } : {}),
             databasePath: command.databasePath,
@@ -281,7 +285,7 @@ export function createCursorMemoryHookRuntime(
           // writes under this lock so an older start cannot overwrite a new one.
           const result = await memory.recordTurnStart({
             sessionId: command.sessionId, clientTurnId: command.turnId,
-            cwd: command.cwd, transcriptPath: command.transcriptPath,
+            cwd: command.cwd, workspaceKind: command.workspaceKind, transcriptPath: command.transcriptPath,
             createdAt, traceContext, prompt: command.prompt, repositoryMemory,
             onTurnRegistered(metadata) {
               turn.metadata = {
@@ -337,7 +341,8 @@ export function createCursorMemoryHookRuntime(
             diagnostic(reason, command);
             return skipped(reason);
           };
-          if (command.databasePath !== turn.databasePath || command.cwd !== turn.cwd) return block("database_or_workspace_changed");
+          if (command.databasePath !== turn.databasePath || command.cwd !== turn.cwd
+            || command.workspaceKind !== turn.workspaceKind) return block("database_or_workspace_changed");
           if (command.phase === "stop" && command.status !== "completed") {
             cancelRetry(command.sessionId);
             if (turn.stopStatus && turn.stopStatus !== command.status) return block("conflicting_stop_events");
@@ -392,13 +397,15 @@ function compactionScopeKey(scope: RepositoryMemoryScope): string {
 
 function traceForTurn(sessionId: string, turn: CursorStoredTurn): TraceContext | undefined {
   return traceContextFromCursorHookBody({
-    sessionId, turnId: turn.turnId, cwd: turn.cwd, transcriptPath: turn.transcriptPath,
+    sessionId, turnId: turn.turnId, cwd: turn.cwd, workspaceKind: turn.workspaceKind,
+    transcriptPath: turn.transcriptPath,
   }, new Date(turn.createdAt).toISOString());
 }
 
 function metadataFromStored(sessionId: string, turn: CursorStoredTurn, traceContext: TraceContext | undefined): MemoryTurnState {
   return {
     client: "cursor", sessionId, clientTurnId: turn.turnId, cwd: turn.cwd,
+    workspaceKind: turn.workspaceKind,
     transcriptPath: turn.transcriptPath, createdAt: turn.createdAt, traceContext,
     ...turn.metadata,
   };

@@ -219,7 +219,7 @@ test("memory CLI rejects a nested repository outside the current turn scope", as
   assert.equal(result.workspaceScopeReason, "workspace_scope_mismatch");
   assert.equal(
     result.userAction,
-    "Start a new Codex, Claude Code, CodeBuddy CLI, WorkBuddy, DSH, or OpenCode session from the target repository or local workspace.",
+    "Start a new Codex, Claude Code, CodeBuddy CLI, WorkBuddy, DSH, OpenCode, or Cursor session from the target repository or local workspace.",
   );
   assert.equal(requestCount, 0);
 });
@@ -340,7 +340,7 @@ test("memory CLI gives the same scope recovery guidance for a Claude turn", asyn
   assert.equal(result.workspaceScopeReason, "workspace_scope_mismatch");
   assert.equal(
     result.userAction,
-    "Start a new Codex, Claude Code, CodeBuddy CLI, WorkBuddy, DSH, or OpenCode session from the target repository or local workspace.",
+    "Start a new Codex, Claude Code, CodeBuddy CLI, WorkBuddy, DSH, OpenCode, or Cursor session from the target repository or local workspace.",
   );
   assert.equal(requestCount, 0);
 });
@@ -436,6 +436,48 @@ test("memory CLI preserves projectless turn scope across trace settings", async 
       assert.equal(requests[1].metadata.memorax_code_memory_scope, "general.v1");
     }
   }
+});
+
+test("memory CLI binds a Cursor projectless turn without cwd to General", async () => {
+  const root = await mkdtemp(join(tmpdir(), "memorax-code-cli-cursor-projectless-"));
+  const commandWorkspace = join(root, "cursor-command-workspace");
+  const memoraxCodeHome = join(root, "memorax-code-home");
+  await mkdir(commandWorkspace, { recursive: true });
+  const sessionId = "cursor-projectless-session";
+  const env = {
+    MEMORAX_CODE_MEMORY_CLI_TRACE_CLIENT: "cursor",
+    MEMORAX_CODE_MEMORY_CLI_TRACE_SESSION_ID: sessionId,
+    MEMORAX_CODE_HOME: memoraxCodeHome,
+    MEMORAX_CODE_MEMORAX_ENDPOINT: "http://memorax.test",
+    MEMORAX_CODE_MEMORAX_API_KEY: "secret",
+    MEMORAX_CODE_MEMORAX_USER_ID: "user-1",
+  };
+  await writeCurrentTraceTurn(traceContextFromCursorHookBody({
+    client: "cursor", sessionId, turnId: "cursor-projectless-turn", workspaceKind: "projectless",
+  }), { memoraxCodeHome, env });
+  const requests = [];
+  const options = {
+    cwd: commandWorkspace,
+    env,
+    fetchImpl: async (url, init) => {
+      requests.push(JSON.parse(init.body));
+      const data = String(url).endsWith("/add") ? { task_id: "cursor-general-add", status: "queued" } : { data: [] };
+      return new Response(JSON.stringify({ success: true, data }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    },
+  };
+  try {
+    const search = await runMemoryCli(["search", "--query", "Cursor General scope"], options);
+    assert.equal(search.ok, true);
+    assert.equal(search.effectiveUserId, "user-1@General");
+    const add = await runMemoryCli([
+      "add", "--memory", "Keep Cursor General preferences.", "--type", "preference", "--reason", "Explicit test save.",
+    ], options);
+    assert.equal(add.ok, true);
+    assert.equal(add.effectiveUserId, "user-1@General");
+    assert.deepEqual(requests.map(({ user_id }) => user_id), ["user-1@General", "user-1@General"]);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("memory CLI validates command cwd before using a projectless turn without cwd", async (t) => {
@@ -947,7 +989,7 @@ test("memory CLI search binds to the current WorkBuddy trace and workspace", asy
   assert.equal(rejected.workspaceScopeReason, "workspace_scope_mismatch");
   assert.equal(
     rejected.userAction,
-    "Start a new Codex, Claude Code, CodeBuddy CLI, WorkBuddy, DSH, or OpenCode session from the target repository or local workspace.",
+    "Start a new Codex, Claude Code, CodeBuddy CLI, WorkBuddy, DSH, OpenCode, or Cursor session from the target repository or local workspace.",
   );
   assert.equal(requests.length, 1);
 

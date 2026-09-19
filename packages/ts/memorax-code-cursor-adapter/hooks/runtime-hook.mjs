@@ -33,9 +33,11 @@ const event = input.hook_event_name;
 // bootstrap context and can correlate later events.
 const sessionId = input.conversation_id ?? input.session_id;
 const turnId = input.generation_id;
-const cwd = Array.isArray(input.workspace_roots) && input.workspace_roots.length === 1
-  ? absolutePath(input.workspace_roots[0]) : undefined;
-const requiresWorkspace = event !== "sessionStart";
+const workspaceRoots = Array.isArray(input.workspace_roots) ? input.workspace_roots : undefined;
+const projectless = workspaceRoots?.length === 0;
+const cwd = workspaceRoots?.length === 1 ? absolutePath(workspaceRoots[0]) : undefined;
+const workspaceKind = projectless ? "projectless" : undefined;
+const requiresWorkspace = event !== "sessionStart" && !projectless;
 if (!["sessionStart", "beforeSubmitPrompt", "preCompact", "afterAgentResponse", "stop"].includes(event)
   || !uuid(sessionId) || (requiresWorkspace && !cwd)
   || (input.session_id !== undefined && input.session_id !== sessionId)
@@ -75,6 +77,7 @@ await ensureBackendAvailable({
 
 const identity = {
   version: 1, client: "cursor", sessionId, turnId, cwd,
+  ...(workspaceKind ? { workspaceKind } : {}),
   databasePath,
   ...(transcriptPath ? { transcriptPath } : {}),
 };
@@ -159,7 +162,7 @@ async function evaluateReminder(turnStart) {
         ...hookInput, cwd: worktree,
       }, contextOptions),
     } : {}),
-  }, { hookEventName: "UserPromptSubmit", sessionId, turnId, cwd });
+  }, { hookEventName: "UserPromptSubmit", sessionId, turnId, cwd, workspaceKind });
 }
 
 async function post(path, body, timeoutMs = 12_000) {

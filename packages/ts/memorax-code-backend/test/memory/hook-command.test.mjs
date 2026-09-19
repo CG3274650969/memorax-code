@@ -181,3 +181,25 @@ test("Cursor response digests and empty continuation prompts retain exact native
   delete reminder.databasePath;
   assert.deepEqual(parseSkillReminderCommand(reminder), { ok: true, command: reminder });
 });
+
+test("Cursor projectless Hook commands preserve General identity without a workspace", () => {
+  const { start } = memoryHookCommands().find(({ start }) => start.client === "cursor");
+  const projectlessIdentity = { ...start };
+  delete projectlessIdentity.cwd;
+  delete projectlessIdentity.transcriptPath;
+  delete projectlessIdentity.prompt;
+  const projectless = { ...projectlessIdentity, workspaceKind: "projectless" };
+  const turnStart = { ...projectless, prompt: "A projectless Cursor prompt." };
+  assert.deepEqual(parseTurnStartCommand(turnStart), { ok: true, command: turnStart });
+
+  const response = { ...projectless, phase: "response", responseDigest: "a".repeat(64) };
+  assert.deepEqual(parseWritebackCommand(response), { ok: true, command: response });
+  const preCompact = { ...projectless };
+  assert.deepEqual(parsePreCompactCommand(preCompact), { ok: true, command: preCompact });
+  const reminder = { ...projectless, content: "Use the memorax-code skill.", triggers: ["cadence"] };
+  delete reminder.databasePath;
+  assert.deepEqual(parseSkillReminderCommand(reminder), { ok: true, command: reminder });
+
+  assert.deepEqual(parseTurnStartCommand({ ...projectless, workspaceKind: "general", prompt: "invalid" }), INVALID);
+  assert.deepEqual(parseTurnStartCommand({ ...projectlessIdentity, prompt: "missing classification" }), INVALID);
+});

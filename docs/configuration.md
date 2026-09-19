@@ -468,8 +468,11 @@ but skip Cursor's database-backed automatic Add and compaction restoration.
 
 Restart or refresh Cursor and open a new conversation after setup.
 `memorax-code-cursor status --json` reports `cursorHooks.status` as `unverified`
-until a managed Hook runs, then `observed`. Turn-bound memory operations require one workspace root;
-ambiguous or missing roots skip those operations, while session-start guidance can still be injected.
+until a managed Hook runs, then `observed`. Turn-bound memory operations accept
+one workspace root for ordinary workspaces or an empty `workspace_roots` array
+for the projectless `General` case. The latter does not require a physical root.
+Ambiguous or missing roots skip those operations, while session-start guidance
+can still be injected.
 
 `sessionStart` injects the shared Skill rules and explicit CLI context through
 Cursor's native `additional_context` and `env` fields. The environment is only
@@ -586,11 +589,12 @@ conditional anonymous-account guidance.
 workspaces. Recognized default chat directories instead share
 `<base-user-id>@General`, with `scopeKind: general`:
 
-| Client | Recognized default chat directory |
+| Client | Recognized default chat directory or context |
 | --- | --- |
 | Codex | Its canonical dated-task location, previously named `Codex-General` in MemoraX. |
 | WorkBuddy | A valid `YYYY-MM-DD-HH-mm-ss` direct child of `~/WorkBuddy`, or of WorkBuddy's configured `defaultWorkspacePath`. |
 | OpenCode | The exact `Default Project` directory under the system Documents directory, including supported Documents redirection. |
+| Cursor | A conversation with no selected workspace or folder (`workspace_roots: []`); no physical directory is required. |
 
 A verified Git repository takes precedence over default-directory detection.
 Other selected directories retain the ordinary repository or folder rules;

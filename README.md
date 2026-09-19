@@ -302,8 +302,10 @@ Debug off, without adding messages to the conversation or blocking the coding ta
 or `memorax-code logs --id <diagnostic-id>` for details you can review and share.
 
 Coding Memory follows the repository or workspace. Recognized default chat
-directories in Codex, WorkBuddy, and OpenCode share `General` under the same
-configured MemoraX user ID. Existing memories are not migrated; see
+directories or contexts in Codex, WorkBuddy, OpenCode, and Cursor share `General` under the
+same configured MemoraX user ID. A Cursor conversation with no folder selected
+uses this shared `@General` scope; opening a repository uses that repository's
+normal scope. Existing memories are not migrated; see
 [memory scope](docs/configuration.md#memory-scope) for the directory rules.
 
 Guest quota reminders may display the complete Mark ID. Treat reminder text

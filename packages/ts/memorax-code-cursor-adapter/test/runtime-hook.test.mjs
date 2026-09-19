@@ -68,7 +68,7 @@ test("Cursor preCompact sends only native identity and does not mark or inject r
     } }]);
     await assert.rejects(readFile(join(fixture.home, "adapters", "cursor", "memory-skill-reminders.json")), { code: "ENOENT" });
     for (const patch of [{ conversation_id: "invalid" }, { generation_id: undefined },
-      { workspace_roots: [] }, { session_id: turnId }]) {
+      { workspace_roots: ["relative"] }, { session_id: turnId }]) {
       assert.equal((await runHook(fixture, { hook_event_name: "preCompact", ...patch })).stdout, "");
     }
     assert.equal(fixture.requests.length, 1);
@@ -124,13 +124,52 @@ test("Cursor sessionStart still injects generic context without a workspace", as
   } finally { await fixture.close(); }
 });
 
+test("Cursor projectless turns preserve General identity across Hook events", async () => {
+  const fixture = await createFixture();
+  try {
+    const projectless = { workspace_roots: [] };
+    await runHook(fixture, { hook_event_name: "beforeSubmitPrompt", prompt: "A projectless Cursor prompt.", ...projectless });
+    assert.deepEqual(fixture.requests.filter(({ path }) => path === "/memory/turn-start").at(-1), {
+      path: "/memory/turn-start", body: {
+        version: 1, client: "cursor", sessionId, turnId, workspaceKind: "projectless",
+        databasePath: fixture.databasePath, prompt: "A projectless Cursor prompt.",
+      },
+    });
+
+    await runHook(fixture, { hook_event_name: "afterAgentResponse", text: "A projectless Cursor response.", ...projectless });
+    assert.deepEqual(fixture.requests.filter(({ path }) => path === "/memory/writeback").at(-1), {
+      path: "/memory/writeback", body: {
+        version: 1, client: "cursor", sessionId, turnId, workspaceKind: "projectless",
+        databasePath: fixture.databasePath, phase: "response",
+        responseDigest: createHash("sha256").update("A projectless Cursor response.").digest("hex"),
+      },
+    });
+
+    await runHook(fixture, { hook_event_name: "stop", status: "completed", ...projectless });
+    assert.deepEqual(fixture.requests.filter(({ path }) => path === "/memory/writeback").at(-1), {
+      path: "/memory/writeback", body: {
+        version: 1, client: "cursor", sessionId, turnId, workspaceKind: "projectless",
+        databasePath: fixture.databasePath, phase: "stop", status: "completed",
+      },
+    });
+
+    await runHook(fixture, { hook_event_name: "preCompact", ...projectless });
+    assert.deepEqual(fixture.requests.filter(({ path }) => path === "/memory/pre-compact").at(-1), {
+      path: "/memory/pre-compact", body: {
+        version: 1, client: "cursor", sessionId, turnId, workspaceKind: "projectless",
+        databasePath: fixture.databasePath,
+      },
+    });
+  } finally { await fixture.close(); }
+});
+
 test("Cursor rejects ambiguous native identities, multiroot workspaces and unsupported events", async () => {
   const fixture = await createFixture();
   try {
     const invalid = [
       { conversation_id: undefined }, { generation_id: undefined },
       { conversation_id: "not-a-native-id" }, { session_id: turnId },
-      { workspace_roots: [] }, { workspace_roots: [fixture.root, fixture.root] },
+      { workspace_roots: [fixture.root, fixture.root] },
       { workspace_roots: ["relative"] },
       { hook_event_name: "UserPromptSubmit", session_id: sessionId },
       { hook_event_name: "afterAgentThought", text: "private thought" },

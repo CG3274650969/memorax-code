@@ -82,6 +82,28 @@ test("Cursor first turn reads DB QA without transcript or starting content, once
   } finally { first.instance.close(); second?.instance.close(); await f.cleanup(); }
 });
 
+test("Cursor projectless turns use the shared General scope without a workspace", async () => {
+  const f = await fixture(); const { instance, writes } = runtime(f);
+  const start = { ...f.start, cwd: undefined, workspaceKind: "projectless" };
+  try {
+    assert.equal((await instance.recordTurnStart(start)).recorded, true);
+    f.write({ latestGenerationId: start.turnId, turns: [f.native(start)] });
+    await observeResponse(instance, start);
+    assert.deepEqual(await instance.writeback(stop(start)), { ok: true, scheduled: true });
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].repositoryScope.scopeKind, "general");
+    assert.equal(writes[0].repositoryScope.effectiveUserId, "cursor-test-user@General");
+    assert.equal(writes[0].repositoryScope.boundWorkspaceRoot, undefined);
+    const persisted = await readState(f);
+    assert.equal(persisted.active.workspaceKind, "projectless");
+    assert.equal("cwd" in persisted.active, false);
+    const current = await readCurrentTraceTurn({ client: "cursor", sessionId: f.sessionId,
+      memoraxCodeHome: f.home, env: f.env });
+    assert.equal(current.traceContext.workspaceKind, "projectless");
+    assert.equal(current.traceContext.cwd, undefined);
+  } finally { instance.close(); await f.cleanup(); }
+});
+
 test("Cursor automatic Add excludes native Hook reminders and keeps the user-text digest authoritative", async (t) => {
   const contexts = [
     { event: "beforeSubmitPrompt", text: "Synthetic Profile Memory: prefer concise review comments." },

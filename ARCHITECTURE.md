@@ -527,13 +527,15 @@ Important distinctions:
   client's exact writeback source and owning tests.
 - Required client/session/turn identity and repository scope fail closed when
   incomplete, conflicting, or unprovable.
-- Adapters identify supported default chat directories as `projectless`;
+- Adapters identify supported default chat directories or contexts as `projectless`;
   `repository/scope.ts` resolves them to `scopeKind: general` and the shared
   remote identity `<base-user-id>@General`. Verified Git identity takes
   precedence. Recognition is client-owned; scope derivation stays shared.
   General sharing does not merge client/session identity or physical workspace
   keys. The [directory rules](docs/configuration.md#memory-scope) apply to Codex,
-  WorkBuddy, and OpenCode; ordinary workspaces retain their existing rules.
+  WorkBuddy, OpenCode, and Cursor; Cursor reports a no-folder conversation as
+  `workspaceKind: projectless` without a `cwd`, so no physical workspace root is
+  required. Ordinary workspaces retain their existing rules.
   Codex can recover an unbound session's General root from the matching
   rollout's first `session_meta` record when a new Turn resumes in a child
   directory. The native initial cwd must match the shared Codex default-directory

@@ -14,7 +14,8 @@ const MAX_RETIRED_TURNS = 8192;
 
 export type CursorStoredTurn = {
   turnId: string;
-  cwd: string;
+  cwd?: string;
+  workspaceKind?: string;
   createdAt: number;
   promptDigest: string;
   transcriptPath?: string;
@@ -91,9 +92,10 @@ function validRecord(value: unknown, sessionId: string): value is CursorSessionR
 
 function validTurn(value: unknown): value is CursorStoredTurn {
   if (!isRecord(value)
-    || !keys(value, ["turnId", "cwd", "createdAt", "promptDigest", "transcriptPath", "databasePath", "continuation", "retryUntil", "responseDigest", "responseObservedAt", "stopStatus", "state", "reason", "metadata"])
+    || !keys(value, ["turnId", "cwd", "workspaceKind", "createdAt", "promptDigest", "transcriptPath", "databasePath", "continuation", "retryUntil", "responseDigest", "responseObservedAt", "stopStatus", "state", "reason", "metadata"])
     || typeof value.turnId !== "string" || !UUID.test(value.turnId)
-    || typeof value.cwd !== "string" || !value.cwd.trim()
+    || (value.cwd !== undefined && (typeof value.cwd !== "string" || !value.cwd.trim() || !isAbsolute(value.cwd)))
+    || (value.workspaceKind !== undefined && value.workspaceKind !== "projectless")
     || !timestamp(value.createdAt) || !digest(value.promptDigest)
     || typeof value.databasePath !== "string" || !isAbsolute(value.databasePath) || value.databasePath.includes("\0")
     || (value.retryUntil !== undefined && !timestamp(value.retryUntil))
