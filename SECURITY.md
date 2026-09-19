@@ -142,7 +142,7 @@ Repo Memory runners use the following native execution permissions:
 | OpenCode | A dedicated session allows `edit`, `bash`, `webfetch`, `doom_loop`, and `external_directory` for `*` |
 | DSH | Uses the selected managed headless Profile via `--profile`; the adapter supplies no additional permission flag |
 | Trae | No automatic background runner |
-| Cursor | No automatic background runner in this integration |
+| Cursor | Headless `agent`/`cursor-agent` worker loads the immutable installed Agent Plugin-shaped runtime and writes only through the bounded Repo Memory job |
 
 Run these jobs only against trusted source in an appropriately trusted local
 environment. Worker timeouts and repository validation bound lifecycle and

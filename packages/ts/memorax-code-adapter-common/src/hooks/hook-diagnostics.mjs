@@ -16,7 +16,7 @@ const FAILURES = {
   HOOK_BACKEND_HTTP_REJECTED: ["response", "The Backend returned an unsuccessful HTTP status for a Hook command.", "This Hook command did not complete successfully.", "Run memorax-code status and share this diagnostic if the rejection persists."],
 };
 const CLIENTS = new Set(["codex", "claude-code", "dsh", "opencode", "codebuddy", "workbuddy", "trae", "cursor"]);
-const OPERATIONS = new Set(["hook.runtime", "hook.ensure-backend", "memory.turn-start", "memory.writeback"]);
+const OPERATIONS = new Set(["hook.runtime", "hook.ensure-backend", "memory.turn-start", "memory.pre-compact", "memory.writeback"]);
 const SYSTEM_CODES = new Set(["ENOENT", "ENOEXEC", "EACCES", "EPERM", "ENOSPC", "EROFS", "ENOTDIR", "EISDIR", "EMFILE", "ENAMETOOLONG", "ECONNREFUSED", "ECONNRESET", "ENOTFOUND", "EAI_AGAIN", "ETIMEDOUT", "ERR_MODULE_NOT_FOUND", "MODULE_NOT_FOUND"]);
 
 // Hook diagnostics are local, content-free, and never change the Hook outcome.
