@@ -86,6 +86,16 @@ async function enableCursorAdapterUnlocked(paths, options) {
     return failure("hooks_invalid", paths, error, "status", "hooks-read");
   }
 
+  const previousGenerationPath = previousState?.runtimePath
+    ? dirname(dirname(previousState.runtimePath)) : undefined;
+  // Never promote altered recovery metadata into a new trusted generation.
+  // Pre-agent layouts retain their migration path; unpublished installs can resume.
+  if (previousState?.repoMemoryAgentDigest && pathEntryExists(previousGenerationPath)
+    && !runtimeGenerationCurrent(previousGenerationPath, previousState.runtimeDigest)) {
+    return failure("install_failed", paths,
+      attachDeploymentFailure(new Error("Cursor runtime generation is invalid"), "runtime-stage", { failureReason: "invalid_record" }),
+      "enable", "runtime-stage");
+  }
   const memoraxCodeCommand = stringOption(options.memoraxCodeCommand) ?? defaultMemoraxCodeCommand();
   const previousMetadata = previousState?.runtimePath
     ? readJsonFile(join(dirname(dirname(previousState.runtimePath)), ".memorax-code-package.json"))?.value
@@ -138,7 +148,7 @@ async function enableCursorAdapterUnlocked(paths, options) {
     && previousState?.skillDigest === skillDigest
     && previousState?.repoMemoryAgentDigest === repoMemoryAgentDigest
     && previousState?.enabled === true
-    && existsSync(runtimePath)
+    && runtimeGenerationCurrent(generationPath, runtimeDigest)
     && skillCurrent
     && agentCurrent
     && hooksConfigured(hookManifest, hookCommand);
@@ -274,8 +284,9 @@ async function readCursorAdapterStatusUnlocked(paths, options) {
   } catch {
     manifest = undefined;
   }
-  const runtimeCurrent = existsSync(state.runtimePath)
-    && state.runtimePath === join(state.runtimeRoot, state.runtimeDigest, "hooks", "runtime-hook.mjs");
+  const generationPath = join(state.runtimeRoot, state.runtimeDigest);
+  const runtimeCurrent = state.runtimePath === join(generationPath, "hooks", "runtime-hook.mjs")
+    && runtimeGenerationCurrent(generationPath, state.runtimeDigest);
   const memoraxCodeCommand = stringOption(options.memoraxCodeCommand) ?? defaultMemoraxCodeCommand();
   const skillCurrent = existsSync(join(state.skillPath, "SKILL.md"))
     && directoryDigestIfPresent(state.skillPath, SKILL_PACKAGE_METADATA) === state.skillDigest
@@ -539,15 +550,8 @@ function validateSources(paths) {
 }
 
 function materializeRuntimeGeneration(paths, generationPath, runtimeDigest, runtimeMetadata) {
-  if (existsSync(generationPath)) {
-    const record = readJsonFile(join(generationPath, "generation.json"));
-    if (record?.unreadable || record?.value?.runtimeDigest !== runtimeDigest
-      || !regularFile(join(generationPath, "hooks", "runtime-hook.mjs"))
-      || !regularFile(join(generationPath, "hooks", "repo-memory-job.mjs"))
-      || !regularFile(join(generationPath, "agents", "memorax-repo-memory.md"))
-      || !regularFile(join(generationPath, "src", "native-repo-memory.mjs"))
-      || !regularFile(join(generationPath, "plugin.json"))
-      || !regularFile(join(generationPath, "skills", "memorax-code", "SKILL.md"))) {
+  if (pathEntryExists(generationPath)) {
+    if (!runtimeGenerationCurrent(generationPath, runtimeDigest)) {
       throw attachDeploymentFailure(new Error("Cursor runtime generation is invalid"), "runtime-stage", { failureReason: "invalid_record" });
     }
     return;
@@ -631,7 +635,8 @@ function readHookManifest(path) {
 function hooksConfigured(manifest, expectedCommand) {
   return REQUIRED_EVENTS.every((event) => {
     const managed = (manifest.hooks[event] ?? []).filter(isManagedHook);
-    return managed.length === 1 && managed[0].type === "command" && managed[0].command === expectedCommand;
+    return managed.length === 1 && managed[0].type === "command" && managed[0].command === expectedCommand
+      && managed[0].timeout === HOOK_TIMEOUT_SECONDS;
   });
 }
 
@@ -692,7 +697,38 @@ function materializeDirectory(source, destination, memoraxCodeCommand) {
   }
 }
 
-function runtimeSourceDigest(paths, runtimeMetadata) {
+function runtimeGenerationCurrent(generationPath, runtimeDigest) {
+  try {
+    if (!regularDirectory(generationPath) || !regularDirectory(dirname(generationPath))) return false;
+    const generationRecordPath = join(generationPath, "generation.json");
+    const metadataPath = join(generationPath, ".memorax-code-package.json");
+    const pluginManifestPath = join(generationPath, "plugin.json");
+    const paths = {
+      runtimeHookSourcePath: join(generationPath, "hooks", "runtime-hook.mjs"),
+      repoMemoryJobSourcePath: join(generationPath, "hooks", "repo-memory-job.mjs"),
+      repoMemoryAgentSourcePath: join(generationPath, "agents", "memorax-repo-memory.md"),
+      nativeRepoMemorySourcePath: join(generationPath, "src", "native-repo-memory.mjs"),
+      runtimeObservationSourcePath: join(generationPath, "src", "runtime-observation.mjs"),
+      nativeDatabasePathSourcePath: join(generationPath, "src", "native-database-path.mjs"),
+      commonSourcePath: join(generationPath, "memorax-code-adapter-common", "src"),
+      skillSourcePath: join(generationPath, "skills", "memorax-code"),
+    };
+    const fixedPaths = new Set([...Object.values(paths), generationRecordPath, metadataPath, pluginManifestPath]);
+    // Traversal rejects symlinks and special files before any deployed content is read.
+    if (regularFiles(generationPath).some(path => !fixedPaths.has(path)
+      && !containedPath(paths.commonSourcePath, path) && !containedPath(paths.skillSourcePath, path))) return false;
+    const generation = readJsonFile(generationRecordPath)?.value;
+    const metadata = readJsonFile(metadataPath)?.value;
+    if (generation?.version !== 1 || generation.runtimeDigest !== runtimeDigest
+      || metadata?.version !== 1 || metadata.runtimeDigest !== runtimeDigest) return false;
+    const { runtimeDigest: _runtimeDigest, ...runtimeMetadata } = metadata;
+    return runtimeSourceDigest(paths, runtimeMetadata, readFileSync(pluginManifestPath)) === runtimeDigest;
+  } catch {
+    return false;
+  }
+}
+
+function runtimeSourceDigest(paths, runtimeMetadata, pluginManifest = CURSOR_AGENT_PLUGIN_MANIFEST) {
   const hash = createHash("sha256");
   hashFile(hash, paths.runtimeHookSourcePath, "hooks/runtime-hook.mjs");
   hashFile(hash, paths.repoMemoryJobSourcePath, "hooks/repo-memory-job.mjs");
@@ -703,7 +739,7 @@ function runtimeSourceDigest(paths, runtimeMetadata) {
   hashDirectory(hash, paths.commonSourcePath, "memorax-code-adapter-common/src");
   hashDirectory(hash, paths.skillSourcePath, "skills/memorax-code");
   hash.update("plugin.json\0");
-  hash.update(CURSOR_AGENT_PLUGIN_MANIFEST);
+  hash.update(pluginManifest);
   hash.update("\0");
   // Recovery paths can change without source changes. Include the metadata
   // in the identity so existing runtime generations remain immutable.

@@ -228,7 +228,7 @@ function savedStartDiagnostic(stdout) {
     };
     if (Object.hasOwn(report, "clientFailures") && !Array.isArray(report.clientFailures)) return false;
     const clientFailures = report.clientFailures ?? [];
-    if (clientFailures.length > 7) return false;
+    if (clientFailures.length > Object.keys(reportKeys).length) return false;
     const diagnostics = report.backend.ok === false ? [report.diagnostic] : [];
     const seenClients = new Set();
     for (const entry of clientFailures) {

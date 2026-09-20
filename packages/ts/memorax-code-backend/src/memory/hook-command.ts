@@ -284,8 +284,8 @@ export function parsePreCompactCommand(
   const base = parseCommandBase(value, PRE_COMPACT_KEYS);
   if (!base || base.client !== "cursor") return invalidCommand();
   const turnId = requiredStringField(value, "turnId");
-  const databasePath = requiredStringField(value, "databasePath");
-  const transcriptPath = optionalStringField(value, "transcriptPath");
+  const databasePath = requiredContentField(value, "databasePath");
+  const transcriptPath = optionalContentField(value, "transcriptPath");
   if (!turnId || !validCursorIdentity(base.sessionId, turnId)
     || !validCursorWorkspace(base)
     || !databasePath || !isAbsolute(databasePath) || databasePath.includes("\0")
@@ -306,10 +306,10 @@ export function parseTurnStartCommand(
   const base = parseCommandBase(value, TURN_START_KEYS);
   if (!base) return invalidCommand();
   if (base.client === "cursor") {
-    const databasePath = requiredStringField(value, "databasePath");
+    const databasePath = requiredContentField(value, "databasePath");
     if (!databasePath || !isAbsolute(databasePath) || databasePath.includes("\0")) return invalidCommand();
     const turnId = requiredStringField(value, "turnId");
-    const transcriptPath = optionalStringField(value, "transcriptPath");
+    const transcriptPath = optionalContentField(value, "transcriptPath");
     if (!turnId || !validCursorIdentity(base.sessionId, turnId) || !validCursorWorkspace(base)
       || typeof value.prompt !== "string" || !transcriptPath.ok) return invalidCommand();
     return { ok: true, command: { ...base, client: "cursor", turnId, databasePath,
@@ -396,10 +396,10 @@ export function parseWritebackCommand(
   const base = parseCommandBase(value, WRITEBACK_KEYS);
   if (!base) return invalidCommand();
   if (base.client === "cursor") {
-    const databasePath = requiredStringField(value, "databasePath");
+    const databasePath = requiredContentField(value, "databasePath");
     if (!databasePath || !isAbsolute(databasePath) || databasePath.includes("\0")) return invalidCommand();
     const turnId = requiredStringField(value, "turnId");
-    const transcriptPath = optionalStringField(value, "transcriptPath");
+    const transcriptPath = optionalContentField(value, "transcriptPath");
     if (!turnId || !validCursorIdentity(base.sessionId, turnId) || !validCursorWorkspace(base) || !transcriptPath.ok) return invalidCommand();
     const cursorBase = { ...base, client: "cursor" as const, turnId, databasePath,
       ...(transcriptPath.value ? { transcriptPath: transcriptPath.value } : {}) };
@@ -619,7 +619,9 @@ function parseCommandBase(
   if (!clientKeys || Object.keys(value).some((key) => !clientKeys.has(key))) return undefined;
   const sessionId = requiredStringField(value, "sessionId");
   if (!sessionId) return undefined;
-  const cwd = optionalStringField(value, "cwd");
+  // Filesystem paths retain meaningful whitespace supplied by native Cursor Hooks.
+  const cwd = client === "cursor"
+    ? optionalContentField(value, "cwd") : optionalStringField(value, "cwd");
   const workspaceKind = optionalStringField(value, "workspaceKind");
   if (!cwd.ok || !workspaceKind.ok) return undefined;
   return {
@@ -683,6 +685,15 @@ function optionalStringField(
 ): { ok: true; value?: string } | { ok: false } {
   if (!Object.prototype.hasOwnProperty.call(value, key)) return { ok: true };
   const field = requiredStringField(value, key);
+  return field ? { ok: true, value: field } : { ok: false };
+}
+
+function optionalContentField(
+  value: Record<string, unknown>,
+  key: string,
+): { ok: true; value?: string } | { ok: false } {
+  if (!Object.prototype.hasOwnProperty.call(value, key)) return { ok: true };
+  const field = requiredContentField(value, key);
   return field ? { ok: true, value: field } : { ok: false };
 }
 

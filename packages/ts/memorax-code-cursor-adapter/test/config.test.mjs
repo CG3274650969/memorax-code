@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -69,6 +69,9 @@ test("Cursor installation owns only its Hook entries, shared Skill, and marked R
       assert.equal(managed[0].hooks, undefined);
     }
     assert.equal((await enableCursorAdapter(fixture.options)).changed, false);
+    await rm(generationRoot, { recursive: true });
+    await writeFile(installed.statePath, JSON.stringify({ ...state, enabled: false, installPending: true }));
+    assert.equal((await enableCursorAdapter(fixture.options)).enabled, true);
     await writeCursorRuntimeObservation({ memoraxCodeHome: fixture.options.memoraxCodeHome,
       cursorHome: fixture.options.cursorHome, runtimeDigest: state.runtimeDigest });
     assert.equal((await readCursorAdapterStatus(fixture.options)).cursorHooks.runtimeObserved, true);
@@ -90,6 +93,87 @@ test("Cursor installation owns only its Hook entries, shared Skill, and marked R
     assert.equal(await readFile(unrelated, "utf8"), "user skill");
     assert.equal(await readFile(unrelatedAgent, "utf8"), "user agent");
     assert.equal((await readCursorAdapterStatus(fixture.options)).managed, false);
+  } finally { await fixture.close(); }
+});
+
+test("Cursor readiness rejects incomplete or altered immutable runtime generations", async (t) => {
+  const cases = [
+    ["missing shared runtime", "memorax-code-adapter-common/src/common.mjs", "missing"],
+    ["missing database resolver", "src/native-database-path.mjs", "missing"],
+    ["modified Hook", "hooks/runtime-hook.mjs", "modified"],
+    ["modified plugin manifest", "plugin.json", "modified"],
+    ["modified recovery metadata", ".memorax-code-package.json", "metadata"],
+    ["modified retained database path", ".memorax-code-package.json", "database-path"],
+    ["symlinked shared runtime", "memorax-code-adapter-common/src", "symlink"],
+  ];
+  for (const [name, relativePath, mutation] of cases) await t.test(name, async () => {
+    const fixture = await createFixture();
+    try {
+      const installed = await enableCursorAdapter(fixture.options);
+      assert.equal(installed.enabled, true);
+      const state = JSON.parse(await readFile(installed.statePath, "utf8"));
+      const target = join(state.runtimeRoot, state.runtimeDigest, relativePath);
+      const contentPath = mutation === "symlink" ? join(target, "common.mjs") : target;
+      const original = await readFile(contentPath, "utf8");
+      if (mutation === "missing") await rm(target);
+      else if (mutation === "symlink") {
+        const replacement = join(fixture.root, "replacement");
+        await rename(target, replacement);
+        await symlink(replacement, target, process.platform === "win32" ? "junction" : "dir");
+      } else if (mutation === "metadata" || mutation === "database-path") {
+        const replacement = mutation === "metadata"
+          ? { memoraxCodeCommand: "replaced-command" }
+          : { databasePath: join(fixture.root, "replaced-profile", "state.vscdb") };
+        await writeFile(target, JSON.stringify({ ...JSON.parse(original), ...replacement }));
+      } else await writeFile(target, original + "\n// modified deployed artifact\n");
+      const mutatedContent = mutation === "missing" ? undefined : await readFile(contentPath, "utf8");
+      const status = await readCursorAdapterStatus(fixture.options);
+      assert.equal(status.installed, false);
+      assert.equal(status.enabled, false);
+      assert.equal(status.current, false);
+      assert.equal(status.reason, "artifacts_missing");
+      const hooksBefore = await fixture.hooks();
+      const stateBefore = await readFile(installed.statePath, "utf8");
+      const generationsBefore = await readdir(state.runtimeRoot);
+      const repeated = await enableCursorAdapter(fixture.options);
+      assert.equal(repeated.ok, false);
+      assert.equal(repeated.enabled, false);
+      assert.equal(repeated.failure.failureReason, "invalid_record");
+      assert.deepEqual(await fixture.hooks(), hooksBefore);
+      assert.equal(await readFile(installed.statePath, "utf8"), stateBefore);
+      assert.deepEqual(await readdir(state.runtimeRoot), generationsBefore);
+      if (mutation === "missing") await assert.rejects(readFile(target), /ENOENT/);
+      else assert.equal(await readFile(contentPath, "utf8"), mutatedContent);
+    } finally { await fixture.close(); }
+  });
+});
+
+test("Cursor readiness requires every managed Hook's installed timeout", async () => {
+  const fixture = await createFixture();
+  try {
+    const installed = await enableCursorAdapter(fixture.options);
+    const state = JSON.parse(await readFile(installed.statePath, "utf8"));
+    const expectedTimeout = (await fixture.hooks()).hooks.stop.at(-1).timeout;
+    for (const timeout of [undefined, 15, expectedTimeout + 1]) {
+      const manifest = await fixture.hooks();
+      const managed = manifest.hooks.stop.find(hook => hook.command === state.hookCommand);
+      if (timeout === undefined) delete managed.timeout;
+      else managed.timeout = timeout;
+      await writeFile(join(fixture.options.cursorHome, "hooks.json"), JSON.stringify(manifest));
+      const status = await readCursorAdapterStatus(fixture.options);
+      assert.equal(status.installed, true);
+      assert.equal(status.enabled, false);
+      assert.equal(status.current, false);
+      assert.equal(status.cursorHooks.configured, false);
+      assert.equal(status.reason, "hooks_not_configured");
+      const repaired = await enableCursorAdapter(fixture.options);
+      assert.equal(repaired.enabled, true);
+      assert.equal(repaired.changed, true);
+      const hooks = await fixture.hooks();
+      for (const event of events) assert.equal(hooks.hooks[event].at(-1).timeout, expectedTimeout);
+      assert.deepEqual(hooks.hooks.beforeSubmitPrompt[0], fixture.userHook);
+      assert.deepEqual(hooks.hooks.preCompact[0], fixture.userCompactHook);
+    }
   } finally { await fixture.close(); }
 });
 
@@ -197,6 +281,8 @@ test("Cursor generations retain recovery paths without rewriting an older runtim
     const first = await enableCursorAdapter(fixture.options);
     const state = JSON.parse(await readFile(first.statePath, "utf8"));
     const oldRuntime = await readFile(state.runtimePath, "utf8");
+    await writeFile(fixture.options.runtimeHookSourcePath, "// newer package runtime fixture\n");
+    assert.equal((await readCursorAdapterStatus(fixture.options)).enabled, true);
     const movedCommand = join(fixture.root, "moved-cli.mjs");
     await writeFile(movedCommand, "// never executed\n");
     const changed = await enableCursorAdapter({ ...fixture.options, memoraxCodeCommand: movedCommand });

@@ -182,6 +182,33 @@ test("Cursor response digests and empty continuation prompts retain exact native
   assert.deepEqual(parseSkillReminderCommand(reminder), { ok: true, command: reminder });
 });
 
+test("Cursor Hook commands preserve native path bytes without accepting blank paths", () => {
+  const { start, writeback } = memoryHookCommands().find(({ start }) => start.client === "cursor");
+  const paths = {
+    cwd: start.cwd + " ", databasePath: start.databasePath + " ", transcriptPath: start.transcriptPath + " ",
+  };
+  const { prompt, ...identity } = { ...start, ...paths };
+  const { databasePath, transcriptPath, ...reminderIdentity } = identity;
+  const commands = [
+    ["turn-start", parseTurnStartCommand, { ...identity, prompt }],
+    ["writeback-response", parseWritebackCommand, { ...identity, phase: "response", responseDigest: "a".repeat(64) }],
+    ["writeback-stop", parseWritebackCommand, { ...writeback, ...paths }],
+    ["pre-compact", parsePreCompactCommand, identity],
+    ["skill-reminder", parseSkillReminderCommand, {
+      ...reminderIdentity, content: "Use the memorax-code skill.", triggers: ["cadence"],
+    }],
+  ];
+  for (const [name, parse, command] of commands) {
+    assert.deepEqual(parse(command), { ok: true, command }, name + ": exact paths");
+    for (const field of ["cwd", "databasePath", "transcriptPath"]) {
+      if (!(field in command)) continue;
+      for (const value of [" ", null]) {
+        assert.deepEqual(parse({ ...command, [field]: value }), INVALID, name + ": invalid " + field);
+      }
+    }
+  }
+});
+
 test("Cursor projectless Hook commands preserve General identity without a workspace", () => {
   const { start } = memoryHookCommands().find(({ start }) => start.client === "cursor");
   const projectlessIdentity = { ...start };

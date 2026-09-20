@@ -395,7 +395,8 @@ Concurrent shared Hook recovery is serialized per Backend home and rechecks
 connection authority and health before starting another Backend. Recovery
 preserves the current managed client set, falling back to configured selection
 when no valid active marker is available; the triggering client does not narrow the
-shared integration set.
+shared integration set. Saved child diagnostics are reused for every recognized
+lifecycle client; the accepted report bound follows the client map.
 
 Control-plane implementations are grouped by ownership:
 
@@ -453,7 +454,12 @@ provides Skill guidance and explicit CLI session-environment instructions;
 Cursor only promises Hook environment propagation to subsequent Hooks. Stop
 removes managed Hooks while preserving the Skill; uninstall removes owned
 installation artifacts. Managed Hook deadlines include bounded Backend recovery,
-event delivery, and local context preparation.
+event delivery, and local context preparation. Readiness requires the expected
+managed Hook timeout and a full content check of the installed runtime generation
+against its recorded digest, including copied dependencies and metadata. The same
+check governs generation reuse; damaged generations fail closed without in-place
+mutation. Intact older generations are checked against their own identity rather
+than newer package contents.
 
 Account-free setup creates or restores versioned trial credentials through
 adapter-common's secure credential port and calls MemoraX provisioning to
@@ -528,7 +534,9 @@ Important distinctions:
 - The [native authority map](#native-writeback-authority) identifies each
   client's exact writeback source and owning tests.
 - Required client/session/turn identity and repository scope fail closed when
-  incomplete, conflicting, or unprovable.
+  incomplete, conflicting, or unprovable. Cursor ingress preserves the bytes of
+  validated workspace, database, and transcript paths, including meaningful
+  trailing whitespace, so parsing cannot redirect them to another path.
 - Adapters identify supported default chat directories or contexts as `projectless`;
   `repository/scope.ts` resolves them to `scopeKind: general` and the shared
   remote identity `<base-user-id>@General`. Verified Git identity takes

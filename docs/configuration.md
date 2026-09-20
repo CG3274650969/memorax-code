@@ -444,6 +444,10 @@ ownership record and immutable runtime generations live under
 retains the Skill and managed subagent; uninstall also removes the managed Skill
 and marked subagent definition. Unrelated or user-owned agent definitions are
 preserved, and a conflicting user-owned definition is not overwritten.
+Readiness checks the complete installed runtime against its recorded content
+digest. Missing or changed dependencies make the adapter unavailable; enable
+rejects that damaged immutable generation instead of modifying it in place.
+An intact older generation remains valid independently of newer package contents.
 
 The native conversation database is separate from `CURSOR_HOME`. Its default
 location is:
@@ -478,9 +482,12 @@ one workspace root for ordinary workspaces or an empty `workspace_roots` array
 for the projectless `General` case. The latter does not require a physical root.
 Ambiguous or missing roots skip those operations, while session-start guidance
 can still be injected. Cursor Hook ingress rejects a projectless identity that
-also supplies a `cwd`.
+also supplies a `cwd`. Valid workspace, database, and transcript paths retain
+their exact bytes, including trailing whitespace.
 
-Managed Cursor Hooks have a 150-second native timeout. Backend recovery has a
+Managed Cursor Hooks have a 150-second native timeout. Readiness verifies this
+value as well as the command; a missing or edited timeout is not configured,
+and enabling the adapter restores its managed entries. Backend recovery has a
 90-second maximum, with an initial health probe of at most 1.5 seconds; the
 remaining budget covers event delivery and local context preparation.
 `MEMORAX_CODE_CURSOR_ENSURE_TIMEOUT_MS` and

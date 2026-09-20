@@ -282,3 +282,32 @@ test("Hook recovery reuses saved child diagnostics and falls back for unusable b
     assert.equal(JSON.stringify(records).includes("private-invalid-id"), false);
   }
 });
+
+
+test("Hook recovery reuses saved diagnostics when all eight lifecycle clients fail", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => new Response(null, { status: 503 }));
+  const root = await mkdtemp(join(tmpdir(), "memorax-code-ensure-all-clients-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const writerUrl = new URL("../src/diagnostic-record.mjs", import.meta.url).href;
+  const clients = {
+    codex: "codexAdapter", claude: "claudeAdapter", dsh: "dshAdapter", opencode: "opencodeAdapter",
+    codebuddy: "codebuddyAdapter", workbuddy: "workbuddyAdapter", trae: "traeAdapter", cursor: "cursorAdapter",
+  };
+  const script = 'const { writeDiagnosticRecord } = await import(' + JSON.stringify(writerUrl) + ');'
+    + 'const report = { action: "start", ok: false, backend: { ok: true }, clientFailures: [] };'
+    + 'for (const [client, key] of Object.entries(' + JSON.stringify(clients) + ')) {'
+    + 'const diagnostic = writeDiagnosticRecord(' + JSON.stringify(root)
+    + ', { source: "memorax-code", operation: "backend.start", errorCode: "BACKEND_START_FAILED" });'
+    + 'report[key] = { ok: false }; report.clientFailures.push({ client, diagnostic }); }'
+    + 'console.log(JSON.stringify(report)); process.exit(1);';
+  await ensureBackendAvailable({
+    client: "cursor",
+    backendConnection: { url: "http://127.0.0.1:9", source: "environment" },
+    memoraxCodeCommand: process.execPath,
+    resolveHomes: () => ({ memoraxCodeHome: root }),
+    buildStartArgs: () => ["--input-type=module", "-e", script, "--"],
+  });
+  const records = await recoveryDiagnostics(root);
+  assert.equal(records.length, Object.keys(clients).length);
+  assert.ok(records.every(record => record.source === "memorax-code"));
+});
