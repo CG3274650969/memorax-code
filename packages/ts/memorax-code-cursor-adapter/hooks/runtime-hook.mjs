@@ -142,6 +142,7 @@ if (event === "sessionStart") {
   if (reminder?.reminder) {
     await post("/memory/skill-reminder", {
       version: 1, client: "cursor", sessionId, turnId, cwd,
+      ...(workspaceKind ? { workspaceKind } : {}),
       content: reminder.reminder.content, triggers: reminder.reminder.triggers,
     }, 500);
   }

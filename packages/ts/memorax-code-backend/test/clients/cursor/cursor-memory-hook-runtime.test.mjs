@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { readdirSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -328,6 +329,51 @@ test("Cursor delayed DB persistence recovers without another Hook, including Bac
       assert.equal((await active.instance.writeback(stop(f.start))).reason, "already_accepted_locally");
     } finally { active.instance.close(); await f.cleanup(); }
   });
+});
+
+test("Cursor restart recovers pending writeback beyond retained terminal sessions", { timeout: 20_000 }, async () => {
+  const f = await fixture(); let first, recovered, pendingDb;
+  try {
+    const directory = join(f.home, "runtime", "cursor", "turns");
+    await mkdir(directory, { recursive: true });
+    const sessions = new Map();
+    for (let index = 0; index < 8194; index += 1) {
+      const sessionId = randomUUID();
+      const path = cursorTurnStatePath(f.home, sessionId);
+      const record = { version: 2, client: "cursor", sessionId, retiredTurnIds: [], active: {
+        turnId: randomUUID(), createdAt: Date.now(), promptDigest: cursorTextDigest(prompt),
+        databasePath: f.databasePath, state: "accepted",
+      } };
+      writeFileSync(path, JSON.stringify(record), { mode: 0o600 });
+      sessions.set(path, sessionId);
+    }
+    // Choose an excluded identity from the observed order, not an assumed filename sort.
+    const pendingName = readdirSync(directory).at(-1);
+    const sessionId = sessions.get(join(directory, pendingName));
+    pendingDb = await databaseFixture({ sessionId, databasePath: join(f.root, "pending.vscdb") });
+    const start = { ...f.start, sessionId, databasePath: pendingDb.databasePath };
+    first = runtime(f, { databaseRetryWindowMs: 60_000 });
+    assert.equal((await first.instance.recordTurnStart(start)).recorded, true);
+    await first.instance.writeback(stop(start));
+    assert.equal((await observeResponse(first.instance, start)).scheduled, false);
+    first.instance.close();
+    assert.ok(readdirSync(directory).indexOf(pendingName) >= 8192);
+
+    recovered = runtime(f);
+    pendingDb.write({ latestGenerationId: start.turnId, turns: [f.native(start)] });
+    await until(() => recovered.writes.length === 1);
+    assert.equal(recovered.writes[0].userText, prompt);
+    assert.equal(recovered.writes[0].assistantText, answer);
+    const state = JSON.parse(await readFile(cursorTurnStatePath(f.home, sessionId), "utf8"));
+    assert.equal(state.active.state, "accepted");
+    assert.equal(state.active.metadata, undefined);
+    assert.equal(state.active.retryUntil, undefined);
+    assert.equal((await recovered.instance.writeback(stop(start))).reason, "already_accepted_locally");
+    assert.equal(recovered.writes.length, 1);
+  } finally {
+    first?.instance.close(); recovered?.instance.close();
+    await pendingDb?.cleanup(); await f.cleanup();
+  }
 });
 
 test("Cursor Continue binds the aborted native user and selects only the appended final response", async () => {

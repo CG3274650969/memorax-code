@@ -31,7 +31,9 @@ const provider = createServer(async (request, response) => {
   const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
   requests.push({ path: request.url, body });
   response.writeHead(200, { "content-type": "application/json" });
-  response.end(JSON.stringify({ success: true, data: { task_id: "cursor-smoke-task", status: "completed", items: [] } }));
+  const data = request.url === "/v1/memories/add"
+    ? { task_id: "cursor-smoke-task", status: "completed" } : { data: [] };
+  response.end(JSON.stringify({ success: true, data }));
 });
 await new Promise((accept) => provider.listen(0, "127.0.0.1", accept));
 const reserve = createServer();
@@ -68,6 +70,7 @@ const env = {
   MEMORAX_CODE_MEMORY_WRITEBACK_BUFFER_ENABLED: "false",
   MEMORAX_CODE_MEMORY_WRITEBACK_CHUNK_ENABLED: "false",
   MEMORAX_CODE_CURSOR_ENSURE_BACKEND: "false",
+  MEMORAX_CODE_CURSOR_TRACE_ENABLED: "false",
   MEMORAX_CODE_AUTO_UPDATE: "false",
 };
 const cli = join(packageRoot, "bin", "memorax-code.mjs");
@@ -191,6 +194,59 @@ try {
   await hook("stop", { status: "completed" });
   await delay(100);
   assert.equal(requests.length, 1, "Duplicate stop must not enqueue another Add");
+  // Operational current-turn authority must survive a trace-disabled round trip.
+  // POSIX also allows a distinct sibling whose path differs only by trailing space.
+  const pathWorkspace = join(root, process.platform === "win32" ? "path workspace" : "path workspace ");
+  await mkdir(pathWorkspace);
+  if (process.platform !== "win32") await mkdir(pathWorkspace.trimEnd());
+  const pathIdentity = { conversation_id: randomUUID(), generation_id: randomUUID(), workspace_roots: [pathWorkspace] };
+  const pathSession = JSON.parse(await hook("sessionStart", pathIdentity));
+  await hook("beforeSubmitPrompt", { ...pathIdentity, prompt: "Preserve this synthetic workspace scope." });
+  const pathSessionDir = join(stateHome, "debug", "traces", "cursor", "sessions", pathIdentity.conversation_id);
+  const currentTurn = JSON.parse(await readFile(join(pathSessionDir, ".current-turn.json"), "utf8"));
+  assert.equal(currentTurn.trace.cwd, pathWorkspace);
+  await assert.rejects(stat(join(pathSessionDir, "events.jsonl")), { code: "ENOENT" });
+  const memoryCli = join(packageRoot, "bin", "memorax-cli.mjs");
+  const scopedCli = (args, options = {}) => run(process.execPath, [memoryCli, ...args, "--json"], {
+    cwd: pathWorkspace, env: { ...env, ...pathSession.env }, ...options,
+  }).then(JSON.parse);
+  const searched = await scopedCli(["search", "--query", "Synthetic workspace preference"]);
+  const added = await scopedCli(["add", "--memory", "Preserve synthetic workspace paths.",
+    "--type", "procedural", "--reason", "Explicit package fixture save."]);
+  assert.equal(searched.ok, true);
+  assert.equal(added.ok, true);
+  assert.equal(searched.scopeKind, "local-directory");
+  assert.equal(added.effectiveUserId, searched.effectiveUserId);
+  assert.deepEqual(requests.slice(1).map(({ path, body }) => [path, body.user_id]), [
+    ["/v1/memories/search", searched.effectiveUserId], ["/v1/memories/add", searched.effectiveUserId],
+  ]);
+  if (process.platform !== "win32") {
+    const sibling = await scopedCli(["search", "--query", "Must not cross into the sibling"], {
+      cwd: pathWorkspace.trimEnd(), expectedCode: 1,
+    });
+    assert.equal(sibling.errorCode, "MEMORY_SCOPE_MISMATCH");
+    assert.equal(requests.length, 3);
+  }
+  await assert.rejects(stat(join(pathSessionDir, "events.jsonl")), { code: "ENOENT" });
+
+  // Use the actual Backend parser and trace sink for the projectless reminder;
+  // a Hook stdout assertion alone cannot detect a rejected reminder command.
+  assert.equal((await runCli("stop")).ok, true);
+  env.MEMORAX_CODE_CURSOR_TRACE_ENABLED = "true";
+  assert.equal((await runCli("start")).cursorAdapter.enabled, true);
+  const generalIdentity = { conversation_id: randomUUID(), generation_id: randomUUID(), workspace_roots: [] };
+  const generalPrompt = JSON.parse(await hook("beforeSubmitPrompt", {
+    ...generalIdentity, prompt: "Use concise answers in this synthetic general conversation.",
+  }));
+  assert.ok(generalPrompt.additional_context);
+  const generalEventsPath = join(stateHome, "debug", "traces", "cursor", "sessions",
+    generalIdentity.conversation_id, "events.jsonl");
+  const generalEvents = (await readFile(generalEventsPath, "utf8")).trim().split("\n").map(JSON.parse);
+  const reminderEvents = generalEvents.filter(({ type }) => type === "skill_reminder");
+  assert.equal(reminderEvents.length, 1, "The projectless reminder must be accepted and persisted");
+  assert.equal(reminderEvents[0].trace.workspace_kind, "projectless");
+  assert.equal(reminderEvents[0].trace.turn_id, generalIdentity.generation_id);
+  assert.equal(requests.length, 3, "Projectless registration and reminders must not call MemoraX");
   const status = await runCli("status");
   assert.equal(status.cursorAdapter.cursorHooks.runtimeObserved, true);
   assert.equal((await runCli("stop")).ok, true);
@@ -202,7 +258,7 @@ try {
   await assert.rejects(stat(join(cursorHome, "skills", "memorax-code")), { code: "ENOENT" });
   await assert.rejects(stat(managedAgentPath), { code: "ENOENT" });
   await stat(join(packageRoot, "package.json"));
-  console.log("Cursor npm package smoke: installed Hooks → native SQLite → exact Add; native/imported Skill maintenance delegates without Cursor CLI; no transcript, deduplication and cleanup passed.");
+  console.log("Cursor npm package smoke: installed Hooks → native SQLite → exact Add; native/imported Skill maintenance delegates without Cursor CLI; trace-off scoped CLI, projectless reminder persistence, deduplication and cleanup passed.");
 } finally {
   let cleanupError;
   try { await run(process.execPath, [cli, "stop", ...lifecycleArgs]); }

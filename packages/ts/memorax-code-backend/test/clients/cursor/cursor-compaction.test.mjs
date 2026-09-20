@@ -30,6 +30,28 @@ test("Cursor compaction keeps the baseline pending when roots only append", () =
   assert.equal(consumeCursorCompaction(state, binding, snapshot(["d1", "a3", "a4"], [firstArchive])), true);
 });
 
+test("Cursor compaction waits for every summarized root before consuming successive archives", () => {
+  const state = captureCursorCompaction(undefined, binding, baseline);
+  const partial = snapshot(["d1", "a2", "a3"], [firstArchive]);
+  assert.equal(consumeCursorCompaction(state, binding, partial), false);
+  assert.deepEqual(state.baseline.rootMessageIds, baseline.rootMessageIds);
+  assert.deepEqual(state.processedArchiveIds, []);
+  captureCursorCompaction(state, binding, partial);
+  assert.deepEqual(state.baseline.rootMessageIds, baseline.rootMessageIds);
+
+  captureCursorCompaction(state, binding, compacted);
+  const nestedPartial = snapshot(["d2", "d1", "a4"], [firstArchive, secondArchive]);
+  assert.equal(consumeCursorCompaction(state, binding, nestedPartial), false);
+  assert.deepEqual(state.baseline.rootMessageIds, baseline.rootMessageIds);
+  assert.deepEqual(state.processedArchiveIds, []);
+
+  const complete = snapshot(["d2", "a4"], [firstArchive, secondArchive]);
+  assert.equal(consumeCursorCompaction(state, binding, complete), true);
+  assert.deepEqual(state.processedArchiveIds, ["aa", "bb"]);
+  assert.equal(state.baseline, undefined);
+  assert.equal(consumeCursorCompaction(state, binding, complete), false);
+});
+
 test("Cursor compaction rejects archives without the matching root replacement", () => {
   const cases = [
     ["all original roots remain", snapshot(["a1", "a2", "a3", "d1"], [firstArchive])],

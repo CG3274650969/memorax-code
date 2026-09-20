@@ -134,7 +134,8 @@ function validBaseline(value: unknown): value is CursorContinuationBaseline {
 
 export function cursorPendingSessions(home: string): { sessionId: string; turnId: string; retryUntil: number }[] {
   try {
-    return readdirSync(join(home, "runtime", "cursor", "turns")).slice(0, 8192).flatMap((name) => {
+    // Retained terminal sessions must not hide pending work during restart recovery.
+    return readdirSync(join(home, "runtime", "cursor", "turns")).flatMap((name) => {
       if (!/^[0-9a-f]{64}\.json$/.test(name)) return [];
       const path = join(home, "runtime", "cursor", "turns", name);
       try {

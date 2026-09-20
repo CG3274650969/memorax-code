@@ -16,6 +16,9 @@ import {
 } from "../../dist/trace/config.js";
 import {
   traceContextFromClaudeHookBody,
+  traceContextFromCurrentTurnRecord,
+  traceContextFromCursorHookBody,
+  traceContextJson,
   traceContextFromOpenCodeHookBody,
 } from "../../dist/trace/context.js";
 import {
@@ -139,6 +142,28 @@ test("OpenCode Hook trace context maps SDK message identity", () => {
     contextOrigin: "opencode-hook-body",
     capturedAt: "2026-07-24T00:00:00.000Z",
   });
+});
+
+test("Cursor trace and current-turn paths preserve native whitespace", () => {
+  const capturedAt = "2026-09-21T00:00:00.000Z";
+  const context = {
+    schemaVersion: "1", client: "cursor", sessionId: "cursor-session", turnId: "cursor-turn",
+    cwd: "/cursor-project ", transcriptPath: "/cursor-transcript.jsonl ",
+    contextOrigin: "cursor-hook-body", capturedAt,
+  };
+  for (const body of [
+    { client: "cursor", sessionId: context.sessionId, turnId: context.turnId,
+      cwd: context.cwd, transcriptPath: context.transcriptPath },
+    { conversation_id: context.sessionId, generation_id: context.turnId,
+      cwd: context.cwd, transcript_path: context.transcriptPath },
+  ]) {
+    assert.deepEqual(traceContextFromCursorHookBody(body, capturedAt), context);
+  }
+  for (const trace of [context, traceContextJson(context)]) {
+    assert.deepEqual(traceContextFromCurrentTurnRecord({ trace }), {
+      ...context, contextOrigin: "current-turn-file",
+    });
+  }
 });
 
 test("trace store isolates Codex, Claude, and OpenCode sessions with the same id", async () => {

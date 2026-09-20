@@ -69,9 +69,11 @@ function appliedArchives(baseline: Baseline, snapshot: CursorCompactionSnapshot)
   if (!baseline.rootMessageIds.length || baseline.archiveIds.length > snapshot.archives.length
     || baseline.archiveIds.some((id, index) => snapshot.archives[index].id !== id)) return undefined;
   const added = snapshot.archives.slice(baseline.archiveIds.length);
+  const summarizedIds = new Set<string>();
   let roots = baseline.rootMessageIds;
   for (const archive of added) {
     const summarized = new Set(archive.summarizedMessageIds);
+    for (const id of summarized) summarizedIds.add(id);
     const first = roots.findIndex((id) => summarized.has(id));
     if (first < 0 || roots.includes(archive.summaryMessageId)) return undefined;
     // Keep every observed root not accounted for by the archive. Concurrently
@@ -84,7 +86,9 @@ function appliedArchives(baseline: Baseline, snapshot: CursorCompactionSnapshot)
   let index = 0;
   for (const id of snapshot.rootMessageIds) if (id === roots[index]) index += 1;
   if (index !== roots.length) return undefined;
-  if (added.length && baseline.rootMessageIds.every((id) => snapshot.rootMessageIds.includes(id))) return undefined;
+  // A compatible partial replacement is still pending. Keep the checkpoint
+  // until summarized roots, including superseded summaries, have all left.
+  if (snapshot.rootMessageIds.some((id) => summarizedIds.has(id))) return [];
   return added.map(({ id }) => id);
 }
 

@@ -772,7 +772,9 @@ that recover do not produce terminal failure records.
   their diagnostic-only state grants no Turn or repository authority.
   Pending native persistence and local enqueue rejection receive bounded retries
   outside the Hook request; private pending records restore retries after Backend
-  restart within the original deadline. Replacement makes one last exact read,
+  restart within the original deadline. Recovery examines the full private session
+  directory so retained accepted or interrupted records cannot hide pending work;
+  startup scan cost grows with that history. Replacement makes one last exact read,
   then explicitly retires the old generation. Aborts discard metadata; enqueue
   rejection retains it. Acceptance and retired generation records prevent replay.
 - When a degraded direct-`.git` scope upgrades to verified Git scope, the
@@ -829,7 +831,9 @@ Profile preferences on the first eligible turn and Procedure Memory on the share
 first-turn and periodic cadence. Its `preCompact` Hook records a native database
 baseline without injecting context or declaring compaction successful. The Backend
 requires an unchanged archive prefix and new archive records that account for
-replacement of observed root messages in the current native context. On the next
+replacement of observed root messages in the current native context. Every identity
+claimed as summarized, including earlier summary messages, must have left the current
+roots; a partial replacement retains the baseline for a later observation. On the next
 nonempty, registered prompt with an authorized worktree, that evidence permits one
 supplemental Profile and personal-memory reminder. Procedure Memory retains its
 normal cadence. Missing database evidence or a baseline skips restoration; UI
