@@ -704,7 +704,7 @@ function validCursorIdentity(sessionId: string, turnId: string | undefined): boo
 function validCursorWorkspace(base: Readonly<{ cwd?: string; workspaceKind?: string }>): boolean {
   if (base.workspaceKind !== undefined && base.workspaceKind !== "projectless") return false;
   if (!base.cwd) return base.workspaceKind === "projectless";
-  return isAbsolute(base.cwd) && !base.cwd.includes("\0");
+  return base.workspaceKind === undefined && isAbsolute(base.cwd) && !base.cwd.includes("\0");
 }
 
 function invalidCommand<Command>(): MemoryHookCommandParseResult<Command> {

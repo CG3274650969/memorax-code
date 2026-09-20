@@ -55,6 +55,56 @@ test("Cursor delegates a private one-use claim then validates completion indepen
   await waitForProcessExit(leasePid);
 });
 
+test("interrupted native finish can retry validation with the same claim", async (t) => {
+  const f = fixture(t), job = prepare(f), claim = claimJob(f, job);
+  profile(f, f.head);
+  const paused = await pauseFinishValidation(t, f, job, claim.claimToken);
+  paused.child.kill("SIGKILL");
+  await paused.completed;
+  assert.equal(JSON.parse(readFileSync(job.jobPath)).status, "validating");
+  assert.equal(active(f).active, true);
+  for (const command of ["finish", "abort"]) {
+    const extra = command === "abort" ? ["--reason", "cancelled"] : [];
+    assert.equal(transition(f, command, job, ["--claim-token", "0".repeat(64), ...extra]).reason, "invalid_capability");
+  }
+  const retried = transition(f, "finish", job, ["--claim-token", claim.claimToken]);
+  assert.equal(retried.status, "succeeded");
+  assert.equal(retried.validation.ok, true);
+  assert.equal(active(f).active, false);
+});
+
+test("overlapping native finish retries commit only one terminal result", async (t) => {
+  const f = fixture(t), job = prepare(f), claim = claimJob(f, job);
+  profile(f, f.head);
+  const paused = await pauseFinishValidation(t, f, job, claim.claimToken);
+  const retried = transition(f, "finish", job, ["--claim-token", claim.claimToken]);
+  assert.equal(retried.status, "succeeded");
+  const terminal = readFileSync(job.jobPath, "utf8");
+  paused.release();
+  const late = await paused.completed;
+  assert.equal(late.status, 0, late.stderr);
+  assert.equal(JSON.parse(late.stdout).reason, "invalid_job_status");
+  assert.equal(readFileSync(job.jobPath, "utf8"), terminal);
+  assert.equal(active(f).active, false);
+});
+
+test("aborting native validation prevents its late result from replacing a new owner", async (t) => {
+  const f = fixture(t), job = prepare(f), claim = claimJob(f, job);
+  profile(f, f.head);
+  const paused = await pauseFinishValidation(t, f, job, claim.claimToken);
+  const aborted = transition(f, "abort", job, ["--claim-token", claim.claimToken, "--reason", "cancelled"]);
+  assert.equal(aborted.status, "failed");
+  assert.equal(aborted.failureReason, "cancelled");
+  const terminal = readFileSync(job.jobPath, "utf8");
+  const replacement = runCursorRepoMemoryJob(["start", "--mode", "build", "--repo", f.repo], f.options);
+  paused.release();
+  const late = await paused.completed;
+  assert.equal(late.status, 0, late.stderr);
+  assert.equal(JSON.parse(late.stdout).reason, "invalid_job_status");
+  assert.equal(readFileSync(job.jobPath, "utf8"), terminal);
+  assert.equal(active(f).marker.jobId, replacement.jobId);
+});
+
 test("Cursor native claims remain usable when consecutive clock reads advance", (t) => {
   const f = fixture(t), job = prepare(f);
   let now = Date.now();
@@ -342,6 +392,33 @@ function active(f) { return readActiveRepoMemoryJobMarker({ memoraxCodeHome: f.h
 function commit(f, name) { writeFileSync(join(f.repo, name), name); runGit(f.repo, ["add", name]); runGit(f.repo, ["commit", "--quiet", "-m", name]); }
 function runGit(repo, args) { const r = spawnSync("git", args, { cwd: repo, encoding: "utf8" }); assert.equal(r.status, 0, r.stderr); return r.stdout; }
 function runAsync(driver, args) { return new Promise((resolveResult) => { const child = spawn(process.execPath, [driver, ...args], { env: cleanEnv, stdio: ["ignore", "pipe", "pipe"] }); let stdout="", stderr=""; child.stdout.on("data", x => stdout += x); child.stderr.on("data", x => stderr += x); child.once("close", status => resolveResult({status, stdout, stderr, pid: child.pid})); }); }
+
+async function pauseFinishValidation(t, f, job, claimToken) {
+  const startedPath = join(f.root, "validation-started.json"), releasePath = join(f.root, "validation-release");
+  writeFileSync(f.validator, 'import {existsSync,writeFileSync} from "node:fs";const started=' + JSON.stringify(startedPath) + ',release=' + JSON.stringify(releasePath) + ';if(!existsSync(started)){writeFileSync(started,JSON.stringify({pid:process.pid}));const deadline=Date.now()+10000;while(!existsSync(release)&&Date.now()<deadline)Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,20);if(!existsSync(release))process.exit(1);}console.log(JSON.stringify({ok:true}));\n');
+  const driver = join(f.root, "finish-driver.mjs");
+  const args = ["finish", "--repo", f.repo, "--job", job.jobId, "--run", job.runId, "--claim-token", claimToken];
+  writeFileSync(driver, "import {runCursorRepoMemoryJob} from " + JSON.stringify(new URL("../src/native-repo-memory.mjs", import.meta.url).href) + ";console.log(JSON.stringify(runCursorRepoMemoryJob(" + JSON.stringify(args) + "," + JSON.stringify(f.options) + ")));\n");
+  const child = spawn(process.execPath, [driver], { env: cleanEnv, stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "", stderr = "", validatorPid;
+  child.stdout.on("data", chunk => stdout += chunk);
+  child.stderr.on("data", chunk => stderr += chunk);
+  const completed = new Promise(resolveResult => child.once("close", status => resolveResult({ status, stdout, stderr })));
+  t.after(async () => {
+    child.kill("SIGKILL");
+    if (validatorPid) {
+      try { process.kill(validatorPid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+      await waitForProcessExit(validatorPid);
+    }
+    await completed;
+  });
+  const deadline = Date.now() + 5000;
+  while (!existsSync(startedPath) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(existsSync(startedPath), true, "finish must reach its independent validator: " + stderr);
+  validatorPid = JSON.parse(readFileSync(startedPath)).pid;
+  assert.equal(JSON.parse(readFileSync(job.jobPath)).status, "validating");
+  return { child, completed, release: () => writeFileSync(releasePath, "release") };
+}
 
 async function waitForProcessExit(pid) {
   const deadline = Date.now() + 6000;

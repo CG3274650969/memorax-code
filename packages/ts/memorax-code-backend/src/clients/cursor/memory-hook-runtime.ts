@@ -70,10 +70,11 @@ export function createCursorMemoryHookRuntime(
 
   function reportFailure(operation: CursorFailureContext["operation"], reason: string,
     command: { sessionId: string; turnId: string }, record?: CursorSessionRecord, save?: () => void,
-    retryExhausted = false, error?: unknown) {
+    retryExhausted = false, error?: unknown, scope: "turn" | "session" = "turn") {
     // Called under the session lock when durable state is available. Diagnostic
     // bookkeeping never changes content authority or the original Hook result.
-    const key = cursorTextDigest(JSON.stringify([operation, command.turnId, reason]));
+    const key = cursorTextDigest(JSON.stringify(scope === "session"
+      ? [operation, reason] : [operation, command.turnId, reason]));
     if (record?.diagnosticKeys?.includes(key)) return;
     if (!recordCursorFailure(reason, { memoraxCodeHome: home, env: options.env, operation,
       ...command, retryExhausted, error }) || !record || !save) return;
@@ -265,7 +266,15 @@ export function createCursorMemoryHookRuntime(
       // metadata must still stop registration before scope, trace or scheduling.
       if (sessionKind.ok && sessionKind.snapshot === "subagent") return { ok: true, recorded: false };
       if (!sessionKind.ok && !["database_session_missing", "database_unavailable"].includes(sessionKind.reason)) {
-        reportFailure("memory.turn-start", sessionKind.reason, command);
+        try {
+          await withCursorSessionRecord(stateOptions(command.sessionId), async (record, save) => {
+            // Persistent classification failures must not create a diagnostic
+            // for every prompt or Backend restart. This records no Turn authority.
+            reportFailure("memory.turn-start", sessionKind.reason, command, record, save, false, undefined, "session");
+          });
+        } catch (error) {
+          reportFailure("memory.turn-start", "turn_state_unavailable", command, undefined, undefined, false, error);
+        }
         return { ok: true, recorded: false };
       }
       const createdAt = now();

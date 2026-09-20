@@ -13,7 +13,7 @@ const runtimeRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const commonRoot = join(runtimeRoot, "memorax-code-adapter-common", "src");
 const { resolveBackendConnection } = await import(pathToFileURL(join(commonRoot, "backend-connection.mjs")).href);
 const { postBackendCommand } = await import(pathToFileURL(join(commonRoot, "backend-command.mjs")).href);
-const { ensureBackendAvailable } = await import(pathToFileURL(join(commonRoot, "hooks", "ensure-backend-runner.mjs")).href);
+const { ensureBackendAvailable, DEFAULT_ENSURE_BACKEND_START_TIMEOUT_MS } = await import(pathToFileURL(join(commonRoot, "hooks", "ensure-backend-runner.mjs")).href);
 const {
   memorySkillReminderContext,
   personalMemoryReminderContext,
@@ -73,8 +73,8 @@ await ensureBackendAvailable({
   client: "cursor",
   ensureBackendValue: process.env.MEMORAX_CODE_CURSOR_ENSURE_BACKEND
     ?? process.env.MEMORAX_CODE_CURSOR_HOOK_ENSURE_BACKEND,
-  healthTimeoutValue: process.env.MEMORAX_CODE_CURSOR_ENSURE_TIMEOUT_MS,
-  startTimeoutValue: process.env.MEMORAX_CODE_CURSOR_START_TIMEOUT_MS,
+  healthTimeoutValue: boundedTimeout(process.env.MEMORAX_CODE_CURSOR_ENSURE_TIMEOUT_MS, 1500),
+  startTimeoutValue: boundedTimeout(process.env.MEMORAX_CODE_CURSOR_START_TIMEOUT_MS, DEFAULT_ENSURE_BACKEND_START_TIMEOUT_MS),
   memoraxCodeCommand: stringValue(process.env.MEMORAX_CODE_CURSOR_LIFECYCLE_COMMAND)
     ?? stringValue(process.env.MEMORAX_CODE_COMMAND),
   pluginRoot: runtimeRoot,
@@ -227,6 +227,11 @@ function uuid(value) {
 function absolutePath(value) {
   return typeof value === "string" && value.trim() && !/[\r\n\0]/.test(value)
     && (isAbsolute(value) || win32.isAbsolute(value)) ? value : undefined;
+}
+
+function boundedTimeout(value, maximum) {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? Math.min(parsed, maximum) : maximum;
 }
 
 function stringValue(value) {

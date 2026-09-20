@@ -452,7 +452,8 @@ materializes an immutable runtime and the canonical Skill. SessionStart
 provides Skill guidance and explicit CLI session-environment instructions;
 Cursor only promises Hook environment propagation to subsequent Hooks. Stop
 removes managed Hooks while preserving the Skill; uninstall removes owned
-installation artifacts.
+installation artifacts. Managed Hook deadlines include bounded Backend recovery,
+event delivery, and local context preparation.
 
 Account-free setup creates or restores versioned trial credentials through
 adapter-common's secure credential port and calls MemoraX provisioning to
@@ -536,7 +537,8 @@ Important distinctions:
   keys. The [directory rules](docs/configuration.md#memory-scope) apply to Codex,
   WorkBuddy, OpenCode, and Cursor; Cursor reports a no-folder conversation as
   `workspaceKind: projectless` without a `cwd`, so no physical workspace root is
-  required. Ordinary workspaces retain their existing rules.
+  required. Cursor ingress rejects an identity containing both `cwd` and
+  `workspaceKind: projectless`. Ordinary workspaces retain their existing rules.
   Codex can recover an unbound session's General root from the matching
   rollout's first `session_meta` record when a new Turn resumes in a child
   directory. The native initial cwd must match the shared Codex default-directory
@@ -758,6 +760,8 @@ that recover do not produce terminal failure records.
   read emits one content-free diagnostic while the locked Turn metadata remains
   recoverable. Cursor records bounded diagnostic keys with its private session
   state so repeated Hooks and Backend restarts do not duplicate that observation.
+  Classification failures before registration use session-scoped diagnostic keys;
+  their diagnostic-only state grants no Turn or repository authority.
   Pending native persistence and local enqueue rejection receive bounded retries
   outside the Hook request; private pending records restore retries after Backend
   restart within the original deadline. Replacement makes one last exact read,
@@ -857,8 +861,11 @@ does not execute a model or supervise the native Task. The child must claim a si
 with the returned claim capability. Finalization verifies job ownership, an
 unchanged snapshot HEAD, the canonical bundle validator, and PROFILE local_head;
 a Task launch or model summary is not completion authority. Expired or replaced
-claims cannot finalize. A lease does not terminate a Cursor task or override tool
-approvals. Native task availability and the parent's delegation are required.
+claims cannot finalize. If finalization is interrupted during validation, the
+same claim capability can retry validation or abort the job. Each finish reruns
+the checks, and the final locked transition accepts only one result; late
+validation cannot overwrite an abort or replacement. A lease does not terminate
+a Cursor task or override tool approvals. Native task availability and the parent's delegation are required.
 
 Cursor child composers identified by native subagent metadata are excluded at
 turn-start, before reminders or maintenance scheduling. A missing composer or

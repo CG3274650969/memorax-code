@@ -197,11 +197,18 @@ test("Cursor native child metadata prevents registration before generation or co
   });
 });
 
-test("Cursor failed native session classification records a content-free start diagnostic", async () => {
-  const f = await fixture(); const { instance } = runtime(f);
+test("Cursor durably deduplicates failed session classification without registering a Turn", async () => {
+  const f = await fixture(); let current = runtime(f);
   try {
     f.setRow(`composerData:${f.sessionId}`, JSON.stringify({ composerId: randomUUID(), privateContent: prompt }));
-    assert.deepEqual(await instance.recordTurnStart(f.start), { ok: true, recorded: false });
+    for (const result of await Promise.all([
+      current.instance.recordTurnStart(f.start),
+      current.instance.recordTurnStart(f.start),
+      current.instance.recordTurnStart({ ...f.start, turnId: randomUUID() }),
+    ])) assert.deepEqual(result, { ok: true, recorded: false });
+    current.instance.close(); current = runtime(f);
+    assert.deepEqual(await current.instance.recordTurnStart({ ...f.start, turnId: randomUUID() }),
+      { ok: true, recorded: false });
     const records = failures(f);
     assert.equal(records.length, 1);
     assert.equal(records[0].operation, "memory.turn-start");
@@ -209,7 +216,28 @@ test("Cursor failed native session classification records a content-free start d
     for (const value of [prompt, answer, f.root, f.sessionId, f.start.turnId, "synthetic-secret"]) {
       assert.equal(JSON.stringify(records).includes(value), false);
     }
-  } finally { instance.close(); await f.cleanup(); }
+    const state = await readState(f);
+    assert.equal(state.diagnosticKeys.length, 1);
+    assert.equal(state.active, undefined);
+    assert.equal(state.repositoryScope, undefined);
+    assert.equal((await readCurrentTraceTurn({ client: "cursor", sessionId: f.sessionId,
+      memoraxCodeHome: f.home, env: f.env })).ok, false);
+    assert.equal(current.instance.size(), 0);
+    assert.equal(current.writes.length, 0);
+
+    // A different cause or Session must remain independently reportable.
+    await current.instance.recordTurnStart({ ...f.start, databasePath: "relative-native-db" });
+    const other = { ...f.start, sessionId: randomUUID() };
+    f.setRow(`composerData:${other.sessionId}`, JSON.stringify({ composerId: randomUUID() }));
+    await current.instance.recordTurnStart(other);
+    assert.equal(failures(f).length, 3);
+    assert.equal(failures(f).filter((record) => record.failureReason === "database_path_invalid").length, 1);
+    assert.equal((await readState(f)).diagnosticKeys.length, 2);
+
+    await f.append();
+    assert.equal((await current.instance.recordTurnStart(f.start)).recorded, true);
+    assert.equal(failures(f).length, 3);
+  } finally { current.instance.close(); await f.cleanup(); }
 });
 
 test("Cursor late child metadata excludes otherwise ordinary native QA from writeback", async () => {

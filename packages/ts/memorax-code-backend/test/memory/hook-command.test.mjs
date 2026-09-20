@@ -203,3 +203,28 @@ test("Cursor projectless Hook commands preserve General identity without a works
   assert.deepEqual(parseTurnStartCommand({ ...projectless, workspaceKind: "general", prompt: "invalid" }), INVALID);
   assert.deepEqual(parseTurnStartCommand({ ...projectlessIdentity, prompt: "missing classification" }), INVALID);
 });
+
+test("Cursor Hook commands require exactly one workspace identity", () => {
+  const { start, writeback } = memoryHookCommands().find(({ start }) => start.client === "cursor");
+  const { prompt, ...identity } = start;
+  const { databasePath, transcriptPath, ...reminderIdentity } = identity;
+  const commands = [
+    ["turn-start", parseTurnStartCommand, start],
+    ["writeback-response", parseWritebackCommand, { ...identity, phase: "response", responseDigest: "a".repeat(64) }],
+    ["writeback-stop", parseWritebackCommand, writeback],
+    ["pre-compact", parsePreCompactCommand, identity],
+    ["skill-reminder", parseSkillReminderCommand, {
+      ...reminderIdentity, content: "Use the memorax-code skill.", triggers: ["cadence"],
+    }],
+  ];
+  for (const [name, parse, command] of commands) {
+    assert.deepEqual(parse(command), { ok: true, command }, name + ": workspace");
+    const { cwd, ...withoutWorkspace } = command;
+    const projectless = { ...withoutWorkspace, workspaceKind: "projectless" };
+    assert.deepEqual(parse(projectless), { ok: true, command: projectless }, name + ": projectless");
+  }
+  assert.deepEqual(
+    commands.map(([name, parse, command]) => [name, parse({ ...command, workspaceKind: "projectless" })]),
+    commands.map(([name]) => [name, INVALID]),
+  );
+});

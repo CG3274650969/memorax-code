@@ -90,7 +90,8 @@ function transition(request, runtime) {
   if (request.command === "finish") {
     const acquired = withRepoLock(runtime, repo, () => {
       const state = loadOwnedState(request, runtime, repo);
-      const rejection = authorize(request, runtime, state, "claimed");
+      // Validation is read-only; retries still compete for one locked terminal transition.
+      const rejection = authorize(request, runtime, state, "claimed", "validating");
       if (rejection) return rejection;
       state.status = "validating";
       writeState(runtime, state);
@@ -152,17 +153,17 @@ function transition(request, runtime) {
         instructions: memoryPrompt + "\nThis is a Cursor native subagent. Do not call the Skill router, repo-read, maintain, start, any client CLI, or delegate again. Read the direct reference completely and perform its collect/detect/author/validate steps. The fixed authoring lease expires at " + state.expiresAt + ". Before every write confirm the lease has not expired. When authoring is complete, call finish below; only its validated succeeded result is success. If blocked, use abort instead.\n\n" + invocation(runtime, state, "finish", ["--claim-token", claimToken]) + "\n\n" + invocation(runtime, state, "abort", ["--claim-token", claimToken, "--reason", "child_failed"]),
       };
     }
-    const rejection = authorize(request, runtime, state, "claimed");
+    const rejection = authorize(request, runtime, state, "claimed", "validating");
     if (rejection) return rejection;
     return finishState(runtime, state, request.reason);
   });
 }
 
-function authorize(request, runtime, state, status) {
+function authorize(request, runtime, state, ...statuses) {
   const credential = request.command === "claim" ? request.ticket : request.claimToken;
   const expected = request.command === "claim" ? state.ticketHash : state.claimHash;
   if (!matches(credential, expected)) return rejected("invalid_capability");
-  if (state.status !== status) return rejected("invalid_job_status");
+  if (!statuses.includes(state.status)) return rejected("invalid_job_status");
   if (runtime.now() >= Date.parse(state.expiresAt)) return finishState(runtime, state, "lease_expired");
   const marker = readActiveRepoMemoryJobMarker({ memoraxCodeHome: runtime.home, repoRealpath: state.repo });
   if (!Number.isSafeInteger(state.leasePid) || marker.marker?.pid !== state.leasePid || !marker.active || marker.reason === "invalid_lease" || marker.marker?.jobId !== state.jobId || marker.marker?.runId !== state.runId || marker.marker?.leaseExpiresAt !== state.expiresAt || marker.marker?.startedAt !== (state.claimedAt || state.startedAt)) return rejected("job_ownership_lost");

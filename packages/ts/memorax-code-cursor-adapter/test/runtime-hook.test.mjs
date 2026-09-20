@@ -3,12 +3,13 @@ import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { realpathSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { enableCursorAdapter } from "../src/config.mjs";
 import { cursorDatabasePath } from "../src/native-database-path.mjs";
+import { DEFAULT_ENSURE_BACKEND_START_TIMEOUT_MS } from "../../memorax-code-adapter-common/src/hooks/ensure-backend-runner.mjs";
 
 const sessionId = "11111111-1111-4111-8111-111111111111";
 const turnId = "22222222-2222-4222-8222-222222222222";
@@ -468,6 +469,53 @@ test("Cursor reminder trace failure does not hold the prompt Hook until its nati
   } finally { await fixture.close(); }
 });
 
+
+test("installed Cursor Hook budget covers cold recovery before delivering the event", async () => {
+  const fixture = await createFixture();
+  const pidPath = join(fixture.root, "recovery.pid");
+  try {
+    const manifest = JSON.parse(await readFile(join(fixture.cursorHome, "hooks.json"), "utf8"));
+    for (const hooks of Object.values(manifest.hooks)) {
+      assert.ok(hooks[0].timeout * 1000 > DEFAULT_ENSURE_BACKEND_START_TIMEOUT_MS + 1500 + 12000,
+        "native deadline must allow recovery and event delivery");
+    }
+    fixture.control.healthy = false;
+    const command = join(fixture.root, "slow-recovery.mjs");
+    await writeFile(command, 'import fs from "node:fs";fs.writeFileSync(' + JSON.stringify(pidPath) + ',String(process.pid));setTimeout(()=>process.exit(0),16000);');
+    const result = await runHook(fixture, { hook_event_name: "beforeSubmitPrompt", prompt: "cold recovery" }, {
+      MEMORAX_CODE_CURSOR_ENSURE_BACKEND: "true",
+      MEMORAX_CODE_CURSOR_LIFECYCLE_COMMAND: command,
+    }, manifest.hooks.beforeSubmitPrompt[0].timeout * 1000);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).continue, true);
+    assert.equal(fixture.requests.filter(request => request.path === "/memory/turn-start").length, 1);
+    assert.ok(Number(await readFile(pidPath, "utf8")) > 0, "recovery command must have run");
+  } finally {
+    try { process.kill(Number(await readFile(pidPath, "utf8")), "SIGTERM"); } catch {}
+    await fixture.close();
+  }
+});
+
+test("Cursor recovery overrides stay within the installed native Hook budget", async () => {
+  const fixture = await createFixture();
+  try {
+    const captured = join(fixture.root, "recovery-options.json");
+    const helper = join(dirname(dirname(fixture.runtimePath)), "memorax-code-adapter-common/src/hooks/ensure-backend-runner.mjs");
+    await writeFile(helper, 'import fs from "node:fs";export const DEFAULT_ENSURE_BACKEND_START_TIMEOUT_MS=90000;export async function ensureBackendAvailable(options){fs.writeFileSync(' + JSON.stringify(captured) + ',JSON.stringify({health:options.healthTimeoutValue,start:options.startTimeoutValue}));}');
+    for (const [health, start, expected] of [
+      ["999999", "999999", { health: 1500, start: 90000 }],
+      ["100", "200", { health: 100, start: 200 }],
+      ["invalid", "-1", { health: 1500, start: 90000 }],
+    ]) {
+      const result = await runHook(fixture, { hook_event_name: "sessionStart" }, {
+        MEMORAX_CODE_CURSOR_ENSURE_TIMEOUT_MS: health, MEMORAX_CODE_CURSOR_START_TIMEOUT_MS: start,
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(await readFile(captured, "utf8")), expected);
+    }
+  } finally { await fixture.close(); }
+});
+
 async function createPersonalMemoryRepo(repo) {
   execFileSync("git", ["init", "--quiet", repo]);
   await writeFile(join(repo, ".gitignore"), ".repo_memory/\n");
@@ -492,6 +540,11 @@ async function createFixture({ recordDatabasePath = false } = {}) {
   const requests = [];
   const control = { status: 200, body: { ok: true, recorded: true }, stallReminder: false };
   const server = createServer(async (request, response) => {
+    if (request.url === "/health") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: control.healthy !== false, service: "memorax-code-backend" }));
+      return;
+    }
     let text = "";
     for await (const chunk of request) text += chunk;
     requests.push({ path: request.url, body: JSON.parse(text) });
@@ -518,12 +571,22 @@ async function createFixture({ recordDatabasePath = false } = {}) {
     runtimeDigest: state.runtimeDigest,
     async close() {
       await new Promise(resolve => server.close(resolve));
+      const jobs = join(home, "repo-memory-jobs");
+      const entries = await readdir(jobs).catch(error => { if (error.code === "ENOENT") return []; throw error; });
+      const pids = [];
+      for (const name of entries.filter(name => name !== "in-progress")) {
+        const state = JSON.parse(await readFile(join(jobs, name, "job.json"), "utf8"));
+        if (Number.isSafeInteger(state.leasePid) && state.leasePid > 0) pids.push(state.leasePid);
+      }
+      // Guards must release their Windows working-directory handles before root removal.
+      await rm(jobs, { recursive: true, force: true });
+      await Promise.all(pids.map(waitForFixtureLeaseExit));
       await rm(root, { recursive: true, force: true });
     },
   };
 }
 
-function runHook(fixture, input, env = {}) {
+function runHook(fixture, input, env = {}, timeoutMs = 10_000) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [fixture.runtimePath, "--memorax-code-cursor-hook-v1"], {
       cwd: fixture.root, env: {
@@ -536,7 +599,7 @@ function runHook(fixture, input, env = {}) {
         MEMORAX_CODE_CURSOR_ENSURE_BACKEND: "false",
         MEMORAX_CODE_BACKEND_URL: `http://127.0.0.1:${fixture.server.address().port}`,
         ...env,
-      }, stdio: ["pipe", "pipe", "pipe"], timeout: 10_000,
+      }, stdio: ["pipe", "pipe", "pipe"], timeout: timeoutMs,
     });
     let stdout = "";
     let stderr = "";
@@ -549,4 +612,15 @@ function runHook(fixture, input, env = {}) {
     child.stdin.end(JSON.stringify({ conversation_id: sessionId, generation_id: turnId,
       workspace_roots: [fixture.root], ...input }));
   });
+}
+
+async function waitForFixtureLeaseExit(pid) {
+  const deadline = Date.now() + 6000;
+  while (Date.now() < deadline) {
+    try { process.kill(pid, 0); }
+    catch (error) { if (error.code === "ESRCH") return; throw error; }
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  try { process.kill(pid, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+  assert.fail("fixture lease guard did not stop within its cleanup budget");
 }

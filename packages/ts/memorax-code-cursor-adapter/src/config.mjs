@@ -39,10 +39,13 @@ import {
   cursorRuntimeObservationPath,
 } from "./runtime-observation.mjs";
 import { cursorDatabasePath } from "./native-database-path.mjs";
+import { DEFAULT_ENSURE_BACKEND_START_TIMEOUT_MS } from "../../memorax-code-adapter-common/src/hooks/ensure-backend-runner.mjs";
 
 const ADAPTER_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const STATE_VERSION = 1;
 const HOOK_MARKER = "--memorax-code-cursor-hook-v1";
+// Reserve a minute beyond recovery for health, event delivery and local context.
+const HOOK_TIMEOUT_SECONDS = Math.ceil(DEFAULT_ENSURE_BACKEND_START_TIMEOUT_MS / 1000) + 60;
 const REQUIRED_EVENTS = ["sessionStart", "beforeSubmitPrompt", "preCompact", "afterAgentResponse", "stop"];
 const SKILL_PACKAGE_METADATA = ".memorax-code-package.json";
 const REPO_MEMORY_AGENT_MARKER = "<!-- memorax-code-cursor-repo-memory-agent-v1 -->";
@@ -595,7 +598,7 @@ function updateManagedHooks(path, command, enabled) {
       const existing = Array.isArray(manifest.hooks[event]) ? manifest.hooks[event] : [];
       const filtered = existing.filter((hook) => !isManagedHook(hook));
       if (enabled) {
-        filtered.push({ type: "command", command, timeout: event === "sessionStart" ? 35 : 15 });
+        filtered.push({ type: "command", command, timeout: HOOK_TIMEOUT_SECONDS });
       }
       if (filtered.length > 0) manifest.hooks[event] = filtered;
       else delete manifest.hooks[event];

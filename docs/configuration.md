@@ -477,7 +477,16 @@ until a managed Hook runs, then `observed`. Turn-bound memory operations accept
 one workspace root for ordinary workspaces or an empty `workspace_roots` array
 for the projectless `General` case. The latter does not require a physical root.
 Ambiguous or missing roots skip those operations, while session-start guidance
-can still be injected.
+can still be injected. Cursor Hook ingress rejects a projectless identity that
+also supplies a `cwd`.
+
+Managed Cursor Hooks have a 150-second native timeout. Backend recovery has a
+90-second maximum, with an initial health probe of at most 1.5 seconds; the
+remaining budget covers event delivery and local context preparation.
+`MEMORAX_CODE_CURSOR_ENSURE_TIMEOUT_MS` and
+`MEMORAX_CODE_CURSOR_START_TIMEOUT_MS` may lower the health and recovery limits
+respectively. Larger values are capped at 1500 and 90000 milliseconds; invalid
+values use those defaults. A healthy Backend does not wait for these deadlines.
 
 `sessionStart` injects the shared Skill rules and explicit CLI context through
 Cursor's native `additional_context` and `env` fields. The environment is only
@@ -859,8 +868,11 @@ The Cursor helper returns a delegation only for a newly reserved job. The child
 claims that job before entering the shared build/update workflow and finalizes
 it through local snapshot and bundle checks. Repository jobs deduplicate across
 clients using the shared marker. Requested and claimed tasks are not completed
-jobs; an expired or replaced claim cannot finalize. The bounded lease does not
-terminate a native task or guarantee progress while Cursor is closed. Native
+jobs; an expired or replaced claim cannot finalize. If a finish helper stops
+during validation, the child can retry finish or abort with the same claim
+capability. Retrying reruns validation; only one terminal result is accepted,
+and a late validator cannot overwrite an abort or replacement. The bounded lease
+does not terminate a native task or guarantee progress while Cursor is closed. Native
 subagent sessions and simulated completion notifications do not enter automatic
 Add. Parent conversation content retains its ordinary writeback rules.
 
@@ -931,7 +943,10 @@ retry policy finishes, rather than recording every retry. Disabled writeback,
 normal buffering, duplicate handling, interruption, and empty eligible content
 do not create failure records. Cursor keeps bounded diagnostic keys in its
 private session state to suppress repeated reports for the same operation, Turn,
-and reason across Hooks and Backend restarts. This is best-effort when local
+and reason across Hooks and Backend restarts. Native classification failures
+before registration are deduplicated by session and reason, including across
+new Turns; this diagnostic-only state does not register a Turn or bind a workspace.
+This is best-effort when local
 storage is unavailable and does not alter writeback authority or consume pending
 content. Other clients do not persist deduplication keys. Records describe
 observed failures; their absence does not prove that a Hook ran or that MemoraX
