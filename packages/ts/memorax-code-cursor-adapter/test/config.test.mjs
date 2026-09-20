@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -12,6 +12,7 @@ import {
 import { writeCursorRuntimeObservation } from "../src/runtime-observation.mjs";
 
 const events = ["sessionStart", "beforeSubmitPrompt", "preCompact", "afterAgentResponse", "stop"];
+const agentSource = "---\nname: memorax-repo-memory\nmodel: inherit\nis_background: true\n---\n\n<!-- memorax-code-cursor-repo-memory-agent-v1 -->\n\nAgent fixture.\n";
 
 test("Cursor discovery honors home overrides and actual platform installations", () => {
   const home = join(tmpdir(), "cursor-discovery");
@@ -27,12 +28,15 @@ test("Cursor discovery honors home overrides and actual platform installations",
     platform: "win32", pathExists: path => path.endsWith("\\Programs\\cursor\\Cursor.exe") }), true);
 });
 
-test("Cursor installation owns only its flat Hook entries and materialized shared Skill", async () => {
+test("Cursor installation owns only its Hook entries, shared Skill, and marked Repo Memory agent", async () => {
   const fixture = await createFixture();
   try {
     const installed = await enableCursorAdapter(fixture.options);
     assert.equal(installed.ok, true);
     assert.equal(installed.enabled, true);
+    assert.equal(installed.cursorAgents.ok, true);
+    assert.equal(installed.repoMemoryAgentPath, join(fixture.options.cursorHome, "agents", "memorax-repo-memory.md"));
+    assert.equal(await readFile(installed.repoMemoryAgentPath, "utf8"), agentSource);
     assert.equal(installed.cursorHooks.configured, true);
     assert.equal(installed.cursorHooks.runtimeObserved, false);
     assert.equal(installed.globalHooksActivationRequired, undefined);
@@ -42,6 +46,8 @@ test("Cursor installation owns only its flat Hook entries and materialized share
     });
     const generationRoot = join(installed.installPath, "..");
     assert.equal(await readFile(join(generationRoot, "hooks", "repo-memory-job.mjs"), "utf8"), "// repo memory job fixture\n");
+    assert.equal(await readFile(join(generationRoot, "agents", "memorax-repo-memory.md"), "utf8"), agentSource);
+    assert.equal(await readFile(join(generationRoot, "src", "native-repo-memory.mjs"), "utf8"), "// native repo memory fixture\n");
     assert.deepEqual(JSON.parse(await readFile(join(generationRoot, "plugin.json"), "utf8")), {
       "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
       name: "memorax-code", description: "Persistent coding memory for Cursor.",
@@ -53,14 +59,14 @@ test("Cursor installation owns only its flat Hook entries and materialized share
     assert.deepEqual(hooks.hooks.beforeSubmitPrompt[0], fixture.userHook);
     assert.deepEqual(hooks.hooks.preCompact[0], fixture.userCompactHook);
     assert.deepEqual(hooks.hooks.afterFileEdit, [{ command: "user-after-edit" }]);
+    const state = JSON.parse(await readFile(installed.statePath, "utf8"));
     for (const event of events) {
-      const managed = hooks.hooks[event].filter(hook => hook.command.includes("--memorax-code-cursor-hook-v1"));
+      const managed = hooks.hooks[event].filter(hook => hook.command === state.hookCommand);
       assert.equal(managed.length, 1);
       assert.equal(managed[0].type, "command");
       assert.equal(managed[0].hooks, undefined);
     }
     assert.equal((await enableCursorAdapter(fixture.options)).changed, false);
-    const state = JSON.parse(await readFile(installed.statePath, "utf8"));
     await writeCursorRuntimeObservation({ memoraxCodeHome: fixture.options.memoraxCodeHome,
       cursorHome: fixture.options.cursorHome, runtimeDigest: state.runtimeDigest });
     assert.equal((await readCursorAdapterStatus(fixture.options)).cursorHooks.runtimeObserved, true);
@@ -68,15 +74,118 @@ test("Cursor installation owns only its flat Hook entries and materialized share
     const unrelated = join(fixture.options.cursorHome, "skills", "user-skill", "SKILL.md");
     await mkdir(join(fixture.options.cursorHome, "skills", "user-skill"), { recursive: true });
     await writeFile(unrelated, "user skill");
+    const unrelatedAgent = join(fixture.options.cursorHome, "agents", "user-agent.md");
+    await writeFile(unrelatedAgent, "user agent");
     assert.equal((await disableCursorAdapter(fixture.options)).enabled, false);
     assert.deepEqual((await fixture.hooks()).hooks, {
       beforeSubmitPrompt: [fixture.userHook], preCompact: [fixture.userCompactHook], afterFileEdit: [{ command: "user-after-edit" }],
     });
     assert.equal(await readFile(join(installed.skillPath, "SKILL.md"), "utf8"), "# Canonical Skill fixture\n");
+    assert.equal(await readFile(installed.repoMemoryAgentPath, "utf8"), agentSource);
     assert.equal((await removeCursorAdapterInstallation(fixture.options)).removed, true);
     await assert.rejects(readFile(join(installed.skillPath, "SKILL.md")), /ENOENT/);
+    await assert.rejects(readFile(installed.repoMemoryAgentPath), /ENOENT/);
     assert.equal(await readFile(unrelated, "utf8"), "user skill");
+    assert.equal(await readFile(unrelatedAgent, "utf8"), "user agent");
     assert.equal((await readCursorAdapterStatus(fixture.options)).managed, false);
+  } finally { await fixture.close(); }
+});
+
+test("Cursor agent updates change immutable runtime identity and repair a missing managed agent", async () => {
+  const fixture = await createFixture();
+  try {
+    const installed = await enableCursorAdapter(fixture.options);
+    const first = JSON.parse(await readFile(installed.statePath, "utf8"));
+    const nextSource = `${agentSource}\nUpdated instructions.\n`.replaceAll("\n", "\r\n");
+    await writeFile(fixture.options.repoMemoryAgentSourcePath, nextSource);
+    const updated = await enableCursorAdapter(fixture.options);
+    const next = JSON.parse(await readFile(updated.statePath, "utf8"));
+    assert.equal(updated.changed, true);
+    assert.notEqual(next.runtimeDigest, first.runtimeDigest);
+    assert.notEqual(next.repoMemoryAgentDigest, first.repoMemoryAgentDigest);
+    assert.equal(await readFile(join(first.runtimeRoot, first.runtimeDigest, "agents", "memorax-repo-memory.md"), "utf8"), agentSource);
+    assert.equal(await readFile(updated.repoMemoryAgentPath, "utf8"), nextSource);
+    await rm(updated.repoMemoryAgentPath);
+    assert.equal((await readCursorAdapterStatus(fixture.options)).enabled, false);
+    assert.equal((await enableCursorAdapter(fixture.options)).enabled, true);
+    assert.equal(await readFile(updated.repoMemoryAgentPath, "utf8"), nextSource);
+  } finally { await fixture.close(); }
+});
+
+test("Cursor upgrades pre-agent state without retaining standalone Agent CLI selection", async () => {
+  const fixture = await createFixture();
+  const previousCommand = process.env.MEMORAX_CODE_CURSOR_AGENT_COMMAND;
+  try {
+    const installed = await enableCursorAdapter(fixture.options);
+    const state = JSON.parse(await readFile(installed.statePath, "utf8"));
+    await rm(state.repoMemoryAgentPath);
+    delete state.repoMemoryAgentPath;
+    delete state.repoMemoryAgentDigest;
+    const generationPath = join(state.runtimeRoot, state.runtimeDigest);
+    const legacyDigest = "a".repeat(64);
+    const legacyGenerationPath = join(state.runtimeRoot, legacyDigest);
+    await rm(join(generationPath, "agents", "memorax-repo-memory.md"));
+    await rename(generationPath, legacyGenerationPath);
+    state.runtimeDigest = legacyDigest;
+    state.runtimePath = join(legacyGenerationPath, "hooks", "runtime-hook.mjs");
+    state.hookCommand = cursorHookCommand(state.runtimePath);
+    await writeFile(installed.statePath, JSON.stringify(state));
+    const metadataPath = join(legacyGenerationPath, ".memorax-code-package.json");
+    const metadata = JSON.parse(await readFile(metadataPath, "utf8"));
+    await writeFile(metadataPath, JSON.stringify({ ...metadata, cursorAgentCommand: "old-cursor-agent" }));
+    process.env.MEMORAX_CODE_CURSOR_AGENT_COMMAND = "unused-cursor-agent";
+    const updated = await enableCursorAdapter({ ...fixture.options, cursorAgentCommand: "also-unused" });
+    assert.equal(updated.enabled, true);
+    assert.equal(updated.changed, true);
+    assert.equal(updated.cursorAgents.ok, true);
+    const nextState = JSON.parse(await readFile(updated.statePath, "utf8"));
+    assert.notEqual(nextState.runtimeDigest, legacyDigest);
+    const nextMetadata = JSON.parse(await readFile(join(nextState.runtimeRoot, nextState.runtimeDigest, ".memorax-code-package.json"), "utf8"));
+    assert.equal(nextMetadata.cursorAgentCommand, undefined);
+    assert.equal(nextState.repoMemoryAgentPath, installed.repoMemoryAgentPath);
+  } finally {
+    if (previousCommand === undefined) delete process.env.MEMORAX_CODE_CURSOR_AGENT_COMMAND;
+    else process.env.MEMORAX_CODE_CURSOR_AGENT_COMMAND = previousCommand;
+    await fixture.close();
+  }
+});
+
+test("Cursor preserves user agent collisions and replacements during install and removal", async () => {
+  const fixture = await createFixture();
+  try {
+    const target = join(fixture.options.cursorHome, "agents", "memorax-repo-memory.md");
+    await mkdir(join(fixture.options.cursorHome, "agents"), { recursive: true });
+    await writeFile(target, "user-owned agent");
+    const before = await fixture.hooks();
+    const collision = await enableCursorAdapter(fixture.options);
+    assert.equal(collision.reason, "agent_conflict");
+    assert.equal(collision.failure.failureReason, "conflict");
+    assert.deepEqual(await fixture.hooks(), before);
+    assert.equal(await readFile(target, "utf8"), "user-owned agent");
+    await rm(target);
+    const installed = await enableCursorAdapter(fixture.options);
+    await writeFile(target, "user replacement without managed marker");
+    assert.equal((await readCursorAdapterStatus(fixture.options)).cursorAgents.ok, false);
+    assert.equal((await enableCursorAdapter(fixture.options)).reason, "agent_conflict");
+    const removed = await removeCursorAdapterInstallation(fixture.options);
+    assert.equal(removed.removed, true);
+    assert.equal(removed.preservedAgentPath, target);
+    assert.equal(await readFile(target, "utf8"), "user replacement without managed marker");
+    await assert.rejects(readFile(installed.statePath), /ENOENT/);
+  } finally { await fixture.close(); }
+});
+
+test("Cursor does not take ownership of an agent symlink or a file with only a copied marker", async () => {
+  const fixture = await createFixture();
+  try {
+    const target = join(fixture.options.cursorHome, "agents", "memorax-repo-memory.md");
+    await mkdir(join(fixture.options.cursorHome, "agents"), { recursive: true });
+    await writeFile(target, agentSource);
+    assert.equal((await enableCursorAdapter(fixture.options)).reason, "agent_conflict");
+    await rm(target);
+    await symlink(fixture.options.repoMemoryAgentSourcePath, target);
+    assert.equal((await enableCursorAdapter(fixture.options)).reason, "agent_conflict");
+    assert.equal(await readFile(fixture.options.repoMemoryAgentSourcePath, "utf8"), agentSource);
   } finally { await fixture.close(); }
 });
 
@@ -221,6 +330,8 @@ async function createFixture() {
     lifecycleLockTarget: join(root, "locks", "cursor-lifecycle"),
     runtimeHookSourcePath: join(source, "runtime-hook.mjs"),
     repoMemoryJobSourcePath: join(source, "repo-memory-job.mjs"),
+    repoMemoryAgentSourcePath: join(source, "memorax-repo-memory.md"),
+    nativeRepoMemorySourcePath: join(source, "native-repo-memory.mjs"),
     runtimeObservationSourcePath: join(source, "runtime-observation.mjs"),
     commonSourcePath: join(source, "common"), skillSourcePath: join(source, "skill"),
     memoraxCodeCommand: join(source, "cli.mjs"),
@@ -230,6 +341,8 @@ async function createFixture() {
   await Promise.all([
     writeFile(options.runtimeHookSourcePath, "// runtime fixture\n"),
     writeFile(options.repoMemoryJobSourcePath, "// repo memory job fixture\n"),
+    writeFile(options.repoMemoryAgentSourcePath, agentSource),
+    writeFile(options.nativeRepoMemorySourcePath, "// native repo memory fixture\n"),
     writeFile(options.runtimeObservationSourcePath, "// observation fixture\n"),
     writeFile(options.memoraxCodeCommand, "// never executed\n"),
     writeFile(join(options.commonSourcePath, "common.mjs"), "// shared runtime\n"),

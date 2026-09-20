@@ -18,6 +18,10 @@ export function cursorSkillPath(cursorHome = defaultCursorHome()) {
   return join(cursorHome, "skills", "memorax-code");
 }
 
+export function cursorRepoMemoryAgentPath(cursorHome = defaultCursorHome()) {
+  return join(cursorHome, "agents", "memorax-repo-memory.md");
+}
+
 export function cursorAdapterRoot(memoraxCodeHome = defaultMemoraxCodeHome()) {
   return join(memoraxCodeHome, "adapters", "cursor");
 }

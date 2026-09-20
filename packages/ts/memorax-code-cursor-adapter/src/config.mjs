@@ -30,6 +30,7 @@ import {
   cursorAdapterRoot,
   cursorAdapterStatePath,
   cursorHooksPath,
+  cursorRepoMemoryAgentPath,
   cursorRuntimeRoot,
   cursorSkillPath,
 } from "./adapter-paths.mjs";
@@ -44,6 +45,7 @@ const STATE_VERSION = 1;
 const HOOK_MARKER = "--memorax-code-cursor-hook-v1";
 const REQUIRED_EVENTS = ["sessionStart", "beforeSubmitPrompt", "preCompact", "afterAgentResponse", "stop"];
 const SKILL_PACKAGE_METADATA = ".memorax-code-package.json";
+const REPO_MEMORY_AGENT_MARKER = "<!-- memorax-code-cursor-repo-memory-agent-v1 -->";
 const CURSOR_AGENT_PLUGIN_MANIFEST = JSON.stringify({
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   name: "memorax-code",
@@ -63,6 +65,15 @@ async function enableCursorAdapterUnlocked(paths, options) {
   if (sourceProblem) return { ...sourceProblem, action: "enable" };
   if (existsSync(paths.skillPath) && previousState?.skillPath !== paths.skillPath) {
     return conflict("skill_conflict", paths, paths.skillPath);
+  }
+  if (pathEntryExists(dirname(paths.repoMemoryAgentPath))
+    && !regularDirectory(dirname(paths.repoMemoryAgentPath))) {
+    return conflict("agent_conflict", paths, dirname(paths.repoMemoryAgentPath), "runtime-stage");
+  }
+  if (pathEntryExists(paths.repoMemoryAgentPath)
+    && (previousState?.repoMemoryAgentPath !== paths.repoMemoryAgentPath
+      || !managedRepoMemoryAgent(paths.repoMemoryAgentPath))) {
+    return conflict("agent_conflict", paths, paths.repoMemoryAgentPath, "runtime-stage");
   }
 
   let hookManifest;
@@ -87,10 +98,6 @@ async function enableCursorAdapterUnlocked(paths, options) {
     return failure("database_path_invalid", paths,
       new Error("MEMORAX_CODE_CURSOR_DATABASE_PATH must be an absolute path without control characters"), "enable", "runtime-stage");
   }
-  const cursorAgentCommand = stringOption(options.cursorAgentCommand)
-    ?? stringOption(process.env.MEMORAX_CODE_CURSOR_AGENT_COMMAND)
-    ?? stringOption(process.env.CURSOR_AGENT_COMMAND)
-    ?? stringOption(previousMetadata?.cursorAgentCommand);
   // Hook recovery forwards npm through MEMORAX_CODE_NPM_EXEC_PATH. A direct
   // lifecycle command may have neither variable, so retain a still-valid entrypoint.
   const npmExecPath = absoluteRegularFile(options.npmExecPath
@@ -101,7 +108,6 @@ async function enableCursorAdapterUnlocked(paths, options) {
     version: 1,
     ...(memoraxCodeCommand ? { memoraxCodeCommand } : {}),
     ...(npmExecPath ? { npmExecPath } : {}),
-    ...(cursorAgentCommand ? { cursorAgentCommand } : {}),
     memoraxCodeHome: paths.memoraxCodeHome,
     cursorHome: paths.cursorHome,
     ...(databasePath ? { databasePath } : {}),
@@ -122,11 +128,16 @@ async function enableCursorAdapterUnlocked(paths, options) {
   catch (error) { throw attachDeploymentFailure(error, "skill-stage"); }
   const skillCurrent = directoryDigestIfPresent(paths.skillPath, SKILL_PACKAGE_METADATA) === skillDigest
     && skillPackageMetadataCurrent(paths.skillPath, memoraxCodeCommand);
+  const repoMemoryAgentDigest = fileDigestIfPresent(paths.repoMemoryAgentSourcePath);
+  const agentCurrent = managedRepoMemoryAgent(paths.repoMemoryAgentPath)
+    && fileDigestIfPresent(paths.repoMemoryAgentPath) === repoMemoryAgentDigest;
   const current = previousState?.runtimeDigest === runtimeDigest
     && previousState?.skillDigest === skillDigest
+    && previousState?.repoMemoryAgentDigest === repoMemoryAgentDigest
     && previousState?.enabled === true
     && existsSync(runtimePath)
     && skillCurrent
+    && agentCurrent
     && hooksConfigured(hookManifest, hookCommand);
   const now = new Date().toISOString();
   const state = {
@@ -138,6 +149,8 @@ async function enableCursorAdapterUnlocked(paths, options) {
     hooksPath: paths.hooksPath,
     skillPath: paths.skillPath,
     skillDigest,
+    repoMemoryAgentPath: paths.repoMemoryAgentPath,
+    repoMemoryAgentDigest,
     runtimeRoot: paths.runtimeRoot,
     runtimePath,
     runtimeDigest,
@@ -149,13 +162,17 @@ async function enableCursorAdapterUnlocked(paths, options) {
   let stage = "state-write";
   try {
     // Claim partial artifacts before publishing them so an interrupted install
-    // can resume without treating its own Skill as user-owned content.
+    // can resume without treating its own Skill or agent as user-owned content.
     atomicWriteJson(paths.statePath, { ...state, enabled: false, installPending: true });
     stage = "runtime-stage";
     materializeRuntimeGeneration(paths, generationPath, runtimeDigest, runtimeMetadata);
     if (!skillCurrent) {
       stage = "skill-stage";
       materializeDirectory(paths.skillSourcePath, paths.skillPath, memoraxCodeCommand);
+    }
+    if (!agentCurrent) {
+      stage = "runtime-stage";
+      atomicWriteText(paths.repoMemoryAgentPath, readFileSync(paths.repoMemoryAgentSourcePath, "utf8"));
     }
     stage = "hooks-write";
     updateManagedHooks(paths.hooksPath, hookCommand, true);
@@ -211,7 +228,8 @@ function disableCursorAdapterUnlocked(paths) {
     action: "disable",
     runtime: "cursor",
     integration: "hooks",
-    installed: existsSync(state.runtimePath) && existsSync(join(state.skillPath, "SKILL.md")),
+    installed: existsSync(state.runtimePath) && existsSync(join(state.skillPath, "SKILL.md"))
+      && managedRepoMemoryAgent(state.repoMemoryAgentPath),
     enabled: false,
     managed: true,
     changed: state.enabled === true,
@@ -244,6 +262,7 @@ async function readCursorAdapterStatusUnlocked(paths, options) {
       statePath: paths.statePath,
       cursorHooks: { ok: false, configured: false, runtimeObserved: false, status: "missing" },
       cursorSkills: skillSummary(paths.skillPath, false),
+      cursorAgents: agentSummary(paths.repoMemoryAgentPath, false),
     };
   }
   let manifest;
@@ -258,12 +277,16 @@ async function readCursorAdapterStatusUnlocked(paths, options) {
   const skillCurrent = existsSync(join(state.skillPath, "SKILL.md"))
     && directoryDigestIfPresent(state.skillPath, SKILL_PACKAGE_METADATA) === state.skillDigest
     && skillPackageMetadataCurrent(state.skillPath, memoraxCodeCommand);
+  const agentCurrent = managedRepoMemoryAgent(state.repoMemoryAgentPath)
+    && fileDigestIfPresent(state.repoMemoryAgentPath) === state.repoMemoryAgentDigest
+    && fileDigestIfPresent(join(dirname(dirname(state.runtimePath)), "agents", "memorax-repo-memory.md"))
+      === state.repoMemoryAgentDigest;
   const configured = Boolean(manifest && hooksConfigured(manifest, state.hookCommand));
   const observation = await readCursorRuntimeObservation(paths.memoraxCodeHome);
   const runtimeObserved = observation?.runtimeDigest === state.runtimeDigest
     && comparablePath(observation.cursorHome, options.platform ?? process.platform)
       === comparablePath(paths.cursorHome, options.platform ?? process.platform);
-  const installed = runtimeCurrent && skillCurrent;
+  const installed = runtimeCurrent && skillCurrent && agentCurrent;
   const enabled = state.enabled === true && installed && configured;
   const installPending = state.installPending === true;
   return {
@@ -280,6 +303,7 @@ async function readCursorAdapterStatusUnlocked(paths, options) {
     statePath: paths.statePath,
     installPath: dirname(state.runtimePath),
     skillPath: state.skillPath,
+    repoMemoryAgentPath: paths.repoMemoryAgentPath,
     cursorHooks: {
       ok: configured,
       configured,
@@ -288,6 +312,7 @@ async function readCursorAdapterStatusUnlocked(paths, options) {
       observationPath: cursorRuntimeObservationPath(paths.memoraxCodeHome),
     },
     cursorSkills: skillSummary(state.skillPath, skillCurrent),
+    cursorAgents: agentSummary(paths.repoMemoryAgentPath, agentCurrent),
     ...(!enabled ? {
       reason: installPending
         ? "install_incomplete"
@@ -317,10 +342,16 @@ async function removeCursorAdapterInstallationUnlocked(paths) {
   }
   const disabled = disableCursorAdapterUnlocked(paths);
   if (disabled.ok === false) return { ...disabled, action: "cursor-adapter-remove" };
+  const removeAgent = state.repoMemoryAgentPath === paths.repoMemoryAgentPath
+    && managedRepoMemoryAgent(paths.repoMemoryAgentPath);
+  const preserveAgent = pathEntryExists(paths.repoMemoryAgentPath) && !removeAgent;
   let stage = "skill-remove";
   try {
     rmSync(state.skillPath, { recursive: true, force: true });
     stage = "plugin-remove";
+    if (removeAgent) {
+      rmSync(paths.repoMemoryAgentPath, { force: true });
+    }
     rmSync(cursorAdapterRoot(paths.memoraxCodeHome), { recursive: true, force: true });
   } catch (error) {
     return failure("remove_failed", paths, error, "cursor-adapter-remove", stage);
@@ -336,6 +367,7 @@ async function removeCursorAdapterInstallationUnlocked(paths) {
     removed: true,
     cursorHome: paths.cursorHome,
     statePath: paths.statePath,
+    ...(preserveAgent ? { preservedAgentPath: paths.repoMemoryAgentPath } : {}),
   };
 }
 
@@ -426,9 +458,12 @@ function resolvePaths(options) {
     statePath,
     hooksPath: resolve(options.hooksPath ?? cursorHooksPath(cursorHome)),
     skillPath: resolve(options.skillPath ?? cursorSkillPath(cursorHome)),
+    repoMemoryAgentPath: resolve(options.repoMemoryAgentPath ?? cursorRepoMemoryAgentPath(cursorHome)),
     runtimeRoot: resolve(options.runtimeRoot ?? cursorRuntimeRoot(memoraxCodeHome)),
     runtimeHookSourcePath: resolve(options.runtimeHookSourcePath ?? join(ADAPTER_ROOT, "hooks", "runtime-hook.mjs")),
     repoMemoryJobSourcePath: resolve(options.repoMemoryJobSourcePath ?? join(ADAPTER_ROOT, "hooks", "repo-memory-job.mjs")),
+    repoMemoryAgentSourcePath: resolve(options.repoMemoryAgentSourcePath ?? join(ADAPTER_ROOT, "agents", "memorax-repo-memory.md")),
+    nativeRepoMemorySourcePath: resolve(options.nativeRepoMemorySourcePath ?? join(ADAPTER_ROOT, "src", "native-repo-memory.mjs")),
     runtimeObservationSourcePath: resolve(options.runtimeObservationSourcePath ?? join(ADAPTER_ROOT, "src", "runtime-observation.mjs")),
     nativeDatabasePathSourcePath: resolve(options.nativeDatabasePathSourcePath ?? join(ADAPTER_ROOT, "src", "native-database-path.mjs")),
     commonSourcePath: resolve(options.commonSourcePath ?? join(ADAPTER_ROOT, "..", "memorax-code-adapter-common", "src")),
@@ -462,6 +497,9 @@ function validateState(state, paths) {
     runtimeRoot: paths.runtimeRoot,
   };
   if (Object.entries(expected).some(([key, value]) => state[key] !== value)
+    || (state.repoMemoryAgentPath !== undefined && state.repoMemoryAgentPath !== paths.repoMemoryAgentPath)
+    || (state.repoMemoryAgentDigest !== undefined && !/^[a-f0-9]{64}$/.test(String(state.repoMemoryAgentDigest)))
+    || ((state.repoMemoryAgentPath === undefined) !== (state.repoMemoryAgentDigest === undefined))
     || !containedPath(paths.memoraxCodeHome, state.runtimeRoot)
     || !containedPath(state.runtimeRoot, state.runtimePath)
     || !/^[a-f0-9]{64}$/.test(String(state.runtimeDigest ?? ""))
@@ -477,10 +515,16 @@ function validateSources(paths) {
   for (const [name, path] of [
     ["runtime_hook", paths.runtimeHookSourcePath],
     ["repo_memory_job", paths.repoMemoryJobSourcePath],
+    ["repo_memory_agent", paths.repoMemoryAgentSourcePath],
+    ["native_repo_memory", paths.nativeRepoMemorySourcePath],
     ["runtime_observation", paths.runtimeObservationSourcePath],
     ["native_database_path", paths.nativeDatabasePathSourcePath],
   ]) {
     if (!regularFile(path)) return { ok: false, reason: `${name}_missing`, sourcePath: path, failure: deploymentFailure(undefined, "runtime-stage", { failureReason: "missing_source" }) };
+  }
+  if (!managedRepoMemoryAgent(paths.repoMemoryAgentSourcePath)) {
+    return { ok: false, reason: "agent_source_invalid", sourcePath: paths.repoMemoryAgentSourcePath,
+      failure: deploymentFailure(undefined, "runtime-stage", { failureReason: "invalid_record" }) };
   }
   for (const [name, path] of [["common_runtime", paths.commonSourcePath], ["skill", paths.skillSourcePath]]) {
     if (!regularDirectory(path)) return { ok: false, reason: `${name}_missing`, sourcePath: path, failure: deploymentFailure(undefined, name === "skill" ? "skill-stage" : "runtime-stage", { failureReason: "missing_source" }) };
@@ -497,6 +541,8 @@ function materializeRuntimeGeneration(paths, generationPath, runtimeDigest, runt
     if (record?.unreadable || record?.value?.runtimeDigest !== runtimeDigest
       || !regularFile(join(generationPath, "hooks", "runtime-hook.mjs"))
       || !regularFile(join(generationPath, "hooks", "repo-memory-job.mjs"))
+      || !regularFile(join(generationPath, "agents", "memorax-repo-memory.md"))
+      || !regularFile(join(generationPath, "src", "native-repo-memory.mjs"))
       || !regularFile(join(generationPath, "plugin.json"))
       || !regularFile(join(generationPath, "skills", "memorax-code", "SKILL.md"))) {
       throw attachDeploymentFailure(new Error("Cursor runtime generation is invalid"), "runtime-stage", { failureReason: "invalid_record" });
@@ -510,8 +556,11 @@ function materializeRuntimeGeneration(paths, generationPath, runtimeDigest, runt
     mkdirSync(join(temporaryPath, "hooks"), { recursive: true, mode: 0o700 });
     mkdirSync(join(temporaryPath, "src"), { recursive: true, mode: 0o700 });
     mkdirSync(join(temporaryPath, "skills"), { recursive: true, mode: 0o700 });
+    mkdirSync(join(temporaryPath, "agents"), { recursive: true, mode: 0o700 });
     cpSync(paths.runtimeHookSourcePath, join(temporaryPath, "hooks", "runtime-hook.mjs"));
     cpSync(paths.repoMemoryJobSourcePath, join(temporaryPath, "hooks", "repo-memory-job.mjs"));
+    cpSync(paths.repoMemoryAgentSourcePath, join(temporaryPath, "agents", "memorax-repo-memory.md"));
+    cpSync(paths.nativeRepoMemorySourcePath, join(temporaryPath, "src", "native-repo-memory.mjs"));
     cpSync(paths.runtimeObservationSourcePath, join(temporaryPath, "src", "runtime-observation.mjs"));
     cpSync(paths.nativeDatabasePathSourcePath, join(temporaryPath, "src", "native-database-path.mjs"));
     cpSync(paths.commonSourcePath, join(temporaryPath, "memorax-code-adapter-common", "src"), { recursive: true });
@@ -644,6 +693,8 @@ function runtimeSourceDigest(paths, runtimeMetadata) {
   const hash = createHash("sha256");
   hashFile(hash, paths.runtimeHookSourcePath, "hooks/runtime-hook.mjs");
   hashFile(hash, paths.repoMemoryJobSourcePath, "hooks/repo-memory-job.mjs");
+  hashFile(hash, paths.repoMemoryAgentSourcePath, "agents/memorax-repo-memory.md");
+  hashFile(hash, paths.nativeRepoMemorySourcePath, "src/native-repo-memory.mjs");
   hashFile(hash, paths.runtimeObservationSourcePath, "src/runtime-observation.mjs");
   hashFile(hash, paths.nativeDatabasePathSourcePath, "src/native-database-path.mjs");
   hashDirectory(hash, paths.commonSourcePath, "memorax-code-adapter-common/src");
@@ -723,6 +774,26 @@ function skillSummary(path, ok) {
   return { ok, status: ok ? "installed" : "missing", managed: ok, memoraxCode: ok, path: join(path, "SKILL.md") };
 }
 
+function agentSummary(path, ok) {
+  return { ok, status: ok ? "installed" : "missing", managed: ok, repoMemory: ok, path };
+}
+
+function managedRepoMemoryAgent(path) {
+  try { return regularDirectory(dirname(path)) && regularFile(path)
+    && readFileSync(path, "utf8").split(/\r?\n/).includes(REPO_MEMORY_AGENT_MARKER); }
+  catch { return false; }
+}
+
+function fileDigestIfPresent(path) {
+  try { return regularFile(path) ? createHash("sha256").update(readFileSync(path)).digest("hex") : undefined; }
+  catch { return undefined; }
+}
+
+function pathEntryExists(path) {
+  try { lstatSync(path); return true; }
+  catch (error) { if (error.code === "ENOENT" || error.code === "ENOTDIR") return false; throw error; }
+}
+
 function failure(reason, paths, error, action = "status", stage = "deploy") {
   return {
     ok: false,
@@ -742,11 +813,11 @@ function failure(reason, paths, error, action = "status", stage = "deploy") {
   };
 }
 
-function conflict(reason, paths, conflictPath) {
+function conflict(reason, paths, conflictPath, stage = "skill-stage") {
   return {
     ...failure(reason, paths, new Error(`unmanaged Cursor artifact exists: ${conflictPath}`), "enable"),
     conflictPath,
-    failure: deploymentFailure(undefined, "skill-stage", { failureReason: "conflict" }),
+    failure: deploymentFailure(undefined, stage, { failureReason: "conflict" }),
   };
 }
 

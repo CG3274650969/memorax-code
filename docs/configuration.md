@@ -424,11 +424,13 @@ Trae until the client provides a suitable headless worker.
 
 ## Cursor integration paths
 
-The Cursor adapter installs native user Hooks and materializes the shared Skill:
+The Cursor adapter installs native user Hooks, the shared Skill, and a managed
+background subagent:
 
 ```text
 ~/.cursor/hooks.json
 ~/.cursor/skills/memorax-code/
+~/.cursor/agents/memorax-repo-memory.md
 ```
 
 `CURSOR_HOME` overrides the root; lifecycle commands also accept `--cursor-home`.
@@ -439,7 +441,9 @@ an unmanaged `memorax-code` Skill, and does not change Cursor's third-party
 integration setting. This installation is independent of Claude Code. Its private
 ownership record and immutable runtime generations live under
 `$MEMORAX_CODE_HOME/adapters/cursor/`. Stop removes only managed Hook entries and
-retains the Skill; uninstall also removes the managed Skill.
+retains the Skill and managed subagent; uninstall also removes the managed Skill
+and marked subagent definition. Unrelated or user-owned agent definitions are
+preserved, and a conflicting user-owned definition is not overwritten.
 
 The native conversation database is separate from `CURSOR_HOME`. Its default
 location is:
@@ -464,7 +468,8 @@ Database reading requires a Backend Node.js runtime with built-in `node:sqlite`;
 use Node.js 22.13 or later. The module is available without an experimental
 flag from that release ([Node.js SQLite documentation](https://nodejs.org/api/sqlite.html)).
 Older runtimes can still run the shared Skill and explicit memory commands,
-but skip Cursor's database-backed automatic Add and compaction restoration.
+but skip Cursor's Turn registration, prompt reminders, automatic Add, and
+compaction restoration.
 
 Restart or refresh Cursor and open a new conversation after setup.
 `memorax-code-cursor status --json` reports `cursorHooks.status` as `unverified`
@@ -481,9 +486,20 @@ guaranteed to reach later Hooks. When the agent runs `memorax-cli`, it must set
 `MEMORAX_CODE_MEMORY_CLI_TRACE_SESSION_ID` to the conversation ID supplied in
 that context, using the command's shell environment. Shell inheritance is not
 assumed. The Skill provides explicit Search, manual Add, and Repo Memory work. After an
-accepted turn-start with a Backend-authorized Git worktree, Cursor also starts the
-supervised missing-bundle build when its headless Agent CLI is available. The
-foreground Hook remains successful when that optional worker is unavailable.
+accepted nonempty turn-start with a Backend-authorized Git worktree, Cursor also
+prepares a missing-bundle build and supplies its native background delegation to
+the foreground agent. The foreground agent launches `memorax-repo-memory` with
+the native Task tool and continues its task. The Hook itself does not launch a
+Task. Missing native background capability skips this work without selecting a
+CLI or foreground authoring fallback.
+
+For read-triggered Repo Memory maintenance, native session context supplies the
+Node executable, absolute helper path in the active Cursor runtime generation,
+and explicit MemoraX home environment. The shared Skill prefers that entrypoint
+even when Cursor imports a second copy from Claude Code. A missing or failed
+session-supplied helper skips maintenance without selecting another client's
+runner. The same routing context accompanies first-turn, periodic, and proven
+post-compaction reminders; shell environment inheritance is not required.
 
 After the Backend confirms turn registration, `beforeSubmitPrompt` returns shared Skill
 reminders and local personal-memory context through native `additional_context`.
@@ -826,19 +842,27 @@ the grace period before the worker force-terminates a client that ignores
 `codebuddy_timeout` (or `<runner>_timeout`) in the job state, so a stalled
 headless client cannot leave an active job and repository marker indefinitely.
 
-A relevant repo-read runs supervised maintenance in the six headless-capable
+A relevant repo-read runs supervised maintenance in the six background-capable
 client integrations. The configured policy may select a build, update, or
 no-op. DSH maintenance requires an enabled, managed Profile that includes
 `@deepseek-ai/dsh-headless`. OpenCode executes the job through its active local
 server. Desktop-only installations do not require a standalone `opencode`
 executable in `PATH`. Trae users can invoke the Skill explicitly, but Trae is
-not an automatic maintenance runner. Cursor uses a local Agent CLI worker with the same bounded supervisor; the worker
-explicitly loads the installed MemoraX Skill and requires separate Cursor CLI
-authentication. A desktop Cursor login alone does not prove that the headless
-command is available. Set `MEMORAX_CODE_CURSOR_AGENT_COMMAND` or
-`CURSOR_AGENT_COMMAND` when the executable is not discoverable as `agent` or
-`cursor-agent`; an explicit command observed during setup is retained in the
-private Cursor runtime generation.
+not an automatic maintenance runner. Cursor uses its managed native background
+subagent for both initial build and read-triggered maintenance. No standalone
+Cursor CLI, additional SDK, or CLI authentication is required; legacy
+`MEMORAX_CODE_CURSOR_AGENT_COMMAND` and `CURSOR_AGENT_COMMAND` overrides no longer
+select a Repo Memory runner. The subagent inherits the Cursor model and normal
+tool permissions, so Cursor may ask for command approval.
+
+The Cursor helper returns a delegation only for a newly reserved job. The child
+claims that job before entering the shared build/update workflow and finalizes
+it through local snapshot and bundle checks. Repository jobs deduplicate across
+clients using the shared marker. Requested and claimed tasks are not completed
+jobs; an expired or replaced claim cannot finalize. The bounded lease does not
+terminate a native task or guarantee progress while Cursor is closed. Native
+subagent sessions and simulated completion notifications do not enter automatic
+Add. Parent conversation content retains its ordinary writeback rules.
 
 ## Default Search/Add diagnostics
 

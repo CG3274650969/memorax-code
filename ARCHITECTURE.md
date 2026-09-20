@@ -196,7 +196,8 @@ client's directory as stale installation data. Hook recovery preserves the
 active client selection and each installation's recorded root and command.
 The Trae adapter merges only marker-owned Global Hooks and
 materializes the shared Skill without changing provider settings. The Cursor
-adapter independently owns its native Hooks and Skill under the Cursor home;
+adapter independently owns its native Hooks, Skill, and Repo Memory background
+subagent definition under the Cursor home;
 it does not depend on Claude Code or change third-party import settings. These
 implementations are loaded by their Backend lifecycle participants. Preserve
 the participant contract and each client's actual authority instead of forcing
@@ -781,8 +782,10 @@ must use the Backend-resolved worktree rather than adapter-local workspace
 input. Trae consumes existing Repo Memory context and exposes the shared Skill,
 but does not schedule background work because no supported headless Trae worker
 exists. Cursor provides session-start Skill guidance, trusted User Profile and
-Procedure Memory context, and schedules the same supervised missing-bundle build
-through its headless Agent CLI when that CLI is available.
+Procedure Memory context, and returns a supervised native background delegation
+for a missing bundle. The foreground agent launches the managed
+`memorax-repo-memory` subagent through Cursor's Task tool. The Hook cannot launch
+a native Task by itself. No separate Cursor CLI, SDK, or CLI login is used.
 
 The Backend owns the TypeScript Repo Memory collector, delta detector, provider
 facets, and validator under `src/repo-memory`, exposed through
@@ -827,8 +830,8 @@ reminder Hook instead resolves the Git root from Hook `cwd`, falling back to
 its local workspace registry when `cwd` is absent, without waiting for a
 Backend worktree result.
 
-A relevant repo-read can invoke supervised maintenance in the six
-headless-capable client integrations. The runner validates the bundle and
+A relevant repo-read can invoke supervised maintenance in the six supported
+background-capable client integrations. The runner validates the bundle and
 selects a background build, update, or no-op according to policy. DSH
 maintenance runs through an enabled, managed headless-capable Profile. For
 OpenCode, both on-demand maintenance and first-eligible-prompt initialization
@@ -841,9 +844,32 @@ database and close it afterward. HTTP/session-response failures and later
 prompt failures do not select this fallback.
 Desktop-only installations with a reachable server do not require a standalone
 OpenCode CLI. Trae remains outside this supervised path until it exposes a
-suitable headless execution authority. Cursor's worker uses the installed Agent
-Plugin-shaped runtime generation and fails closed when its headless CLI is absent
-or unauthenticated.
+suitable headless execution authority. Cursor reuses the common maintenance
+decision, policy, authoring instructions, and bundle validator with a native
+execution coordinator in its adapter. A versioned private job and bounded lease
+use the common repository marker and startup lock, so other runners also
+deduplicate. The child must claim a single-use ticket before authoring and finish
+with the returned claim capability. Finalization verifies job ownership, an
+unchanged snapshot HEAD, the canonical bundle validator, and PROFILE local_head;
+a Task launch or model summary is not completion authority. Expired or replaced
+claims cannot finalize. A lease does not terminate a Cursor task or override tool
+approvals. Native task availability and the parent's delegation are required.
+
+Cursor child composers identified by native subagent metadata are excluded at
+turn-start, before reminders or maintenance scheduling. A missing composer or
+unavailable database alone does not identify a child, preserving first-prompt
+registration; child metadata discovered later still rejects writeback. Native child messages
+and simulated completion notifications are also excluded from automatic Add.
+The maintenance ticket authorizes local job operations, not native conversation
+identity; parent/child writeback authority remains in the Backend database reader.
+
+For Skill-driven maintenance, a helper supplied by the current native session
+takes precedence over the Skill's package-relative helper. Cursor supplies its
+runtime generation's helper, executable, and MemoraX home through session and
+reminder context so an imported Skill uses the current client's runner. A supplied
+entrypoint that is missing or fails does not authorize a fallback to another
+client. A returned Cursor delegation is passed unchanged to the managed native
+background subagent; foreground repo-read never authors the bundle. Clients without that context retain the packaged helper convention.
 
 ## 4. Backend Modular Monolith
 

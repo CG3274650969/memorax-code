@@ -695,6 +695,15 @@ Cursor integration is configured. For `hooks_invalid`, repair
 the existing JSON before rerunning start. For `skill_conflict`, preserve or move
 the unmanaged Skill deliberately before installing the managed one.
 
+Two `memorax-code` Skill entries can appear when Cursor also imports the Claude
+Code plugin. The native Cursor Hooks supply the current session's Repo Memory
+maintenance entrypoint, which takes precedence over either Skill's relative
+helper path. Refresh the integration and start a new conversation after updating
+so that this guidance is present. Disabling third-party imports is not required.
+If the supplied helper is unavailable, maintenance is skipped rather than handed
+to Claude Code; inspect the managed Cursor installation and its
+`~/.cursor/agents/memorax-repo-memory.md` definition.
+
 The conversation database uses Cursor's application-data directory, not
 `CURSOR_HOME`. Check the [native database paths](configuration.md#cursor-integration-paths)
 for your platform. If Cursor uses a custom `--user-data-dir`, set
@@ -782,10 +791,14 @@ copy generated runtime files or edit entries containing
 Trae currently provides no stable raw Session or headless CLI. Automatic
 writeback therefore requires a matching `UserPromptSubmit` and `Stop` Hook
 pair, and automatic background Repo Memory jobs are not available. Explicit
-Search/Add and Skill-driven Repo Memory remain available. Cursor's optional
-background build has a separate prerequisite: install and authenticate the
-headless Agent CLI (`agent` or `cursor-agent`); without it, the foreground Hook
-continues normally and the Repo Memory build must be started through the Skill.
+Search/Add and Skill-driven Repo Memory remain available. Cursor uses its native
+background subagent for Repo Memory initial build and maintenance; it does not
+require a separate CLI. Refresh Cursor after updating to load the managed agent.
+If a job remains pending, check that the parent actually launched the background
+Task and that the child is not waiting for a normal Cursor tool approval. A Task
+launch or completion message is not enough: the helper must finish snapshot and
+bundle validation. Do not launch a replacement while the original child is still
+editing, including after a lease expires.
 
 ## DeepSeek Harness Profile integration is inactive
 

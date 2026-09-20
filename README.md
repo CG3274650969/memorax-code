@@ -156,7 +156,7 @@ refresh every detected coding agent after setup.
 | DeepSeek Harness | Restart or refresh DSH to load the plugin registered in existing Profiles. |
 | OpenCode | Restart or refresh the client to discover the managed plugin and Skill. |
 | Trae | In **Settings → Hooks → Global → Configured Hooks**, enable the registered Global Hooks once. Setup installs the Hooks and Skill; this switch requires manual activation. |
-| Cursor | Restart or refresh Cursor, then open a new conversation to load its native user Hooks and shared Skill. |
+| Cursor | Restart or refresh Cursor, then open a new conversation to load its native user Hooks, shared Skill, and managed background subagent. |
 
 Cursor installs independently of Claude Code under `~/.cursor/hooks.json` and
 `~/.cursor/skills/memorax-code/`; setup preserves its third-party integration
@@ -170,7 +170,9 @@ configured reminder cadence. After a recorded compaction is verified against the
 native database, the next nonempty, registered prompt restores Profile and personal
 reminders; Procedure keeps its normal cadence. Missing evidence skips recovery,
 and restoration during the same continuing task is not guaranteed. Automatic
-prompt retrieval remains disabled. See
+prompt retrieval remains disabled. Repo Memory initial builds and policy-based
+maintenance use Cursor's native background subagent; no separate Cursor CLI or
+CLI login is required. Cursor may request normal tool approvals. See
 [Cursor configuration](docs/configuration.md#cursor-integration-paths).
 
 Open a project, start a new client session, and send one prompt. Then run
@@ -273,7 +275,7 @@ writing when the durable intent or target is unclear.
 | **Preference continuity** | Records User Profile preferences and injects them into future tasks on a configured cadence. |
 | **Procedure reuse** | Records reusable task procedures and reminds future agents to apply them. |
 | **Visible memory impact** | In Codex, Claude Code, CodeBuddy CLI, WorkBuddy, DeepSeek Harness, OpenCode, Trae, and Cursor, opens the final answer with a brief natural-language note when an explicit Coding Memory Search or a Repo, Procedure, or Profile Memory available to the current turn materially guided the task. |
-| **Background Repo Memory maintenance** | Automatically organizes repository structure, entry points, and history evidence in supported headless-capable clients, then updates them according to policy to reduce repeated searching and summarization. Trae remains Skill-only; Cursor can start the supervised initial build when its headless Agent CLI is available. |
+| **Background Repo Memory maintenance** | Automatically organizes repository structure, entry points, and history evidence in supported clients, then updates them according to policy to reduce repeated searching and summarization. Trae remains Skill-only; Cursor uses its native background subagent for initial builds and maintenance. |
 | **Active memory control** | Lets you search and add memory through the bundled MemoraX Code skill or the CLI. |
 | **Client integration** | Integrates with Codex, Claude Code, CodeBuddy CLI, WorkBuddy, DeepSeek Harness, OpenCode, Trae, and Cursor to trigger memory retrieval, reminders, and writeback. Automatic quota reminders are currently available in Codex, Claude Code, CodeBuddy CLI, WorkBuddy, OpenCode, and Trae. |
 | **Local observability** | Uses content-controlled local trace and reconciliation records to inspect activity counts, retrieval, and writeback status. |

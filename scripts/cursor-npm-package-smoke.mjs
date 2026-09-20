@@ -15,11 +15,14 @@ const packageRoot = resolve(process.argv[2] ?? "");
 assert.ok(process.argv[2], "Usage: node scripts/cursor-npm-package-smoke.mjs PACKAGE_ROOT");
 const packageManifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
 assert.equal(packageManifest.name, "@memorax/memorax-code");
-const root = await realpath(await mkdtemp(join(tmpdir(), "memorax-cursor-package-smoke-")));
+const root = await realpath(await mkdtemp(join(tmpdir(), "memorax cursor package smoke-")));
 const home = join(root, "home");
 const stateHome = join(root, "state");
 const cursorHome = join(root, "cursor");
 const workspace = join(root, "workspace");
+const maintenanceRepo = join(root, "maintenance repo");
+const gitDirectory = await commandDirectory("git");
+assert.ok(gitDirectory, "Cursor Repo Memory package smoke requires Git");
 const databasePath = join(root, "native-user-data", "User", "globalStorage", "state.vscdb");
 const requests = [];
 const provider = createServer(async (request, response) => {
@@ -36,7 +39,7 @@ await new Promise((accept) => reserve.listen(0, "127.0.0.1", accept));
 const port = reserve.address().port;
 await new Promise((accept) => reserve.close(accept));
 const env = {
-  PATH: [dirname(process.execPath), ...(process.platform === "win32"
+  PATH: [dirname(process.execPath), gitDirectory, ...(process.platform === "win32"
     ? [join(process.env.SystemRoot ?? "C:\\Windows", "System32")]
     : ["/usr/bin", "/bin", "/usr/sbin", "/sbin"])].join(delimiter),
   ...(process.platform === "win32" ? {
@@ -104,6 +107,67 @@ try {
   };
   const session = JSON.parse(await hook("sessionStart"));
   assert.equal(session.env.MEMORAX_CODE_MEMORY_CLI_TRACE_CLIENT, "cursor");
+  const maintenancePrefix = "MemoraX Code Repo Memory maintenance for this Cursor session: ";
+  const maintenanceLine = session.additional_context.split("\n").find((line) => line.startsWith(maintenancePrefix));
+  assert.ok(maintenanceLine, "The installed Hook must identify the current Cursor maintenance helper");
+  const maintenance = JSON.parse(maintenanceLine.slice(maintenancePrefix.length));
+  assert.equal(maintenance.executable, process.execPath);
+  assert.deepEqual(maintenance.env, { MEMORAX_CODE_HOME: stateHome });
+  assert.equal(maintenance.helper, join(started.cursorAdapter.installPath, "repo-memory-job.mjs"));
+  assert.equal((await stat(maintenance.helper)).isFile(), true);
+  const nativeSkill = join(cursorHome, "skills", "memorax-code");
+  const importedSkill = join(packageRoot, "lib", "memorax-code-claude-adapter", "skills", "memorax-code");
+  assert.equal(await readFile(join(nativeSkill, "references", "repo-read.md"), "utf8"),
+    await readFile(join(importedSkill, "references", "repo-read.md"), "utf8"));
+  await mkdir(maintenanceRepo);
+  for (const args of [["init", "--quiet"], ["config", "user.name", "Cursor Package Test"],
+    ["config", "user.email", "cursor-package@example.invalid"], ["config", "commit.gpgsign", "false"],
+    ["commit", "--quiet", "--allow-empty", "-m", "fixture"]]) await run("git", args, { cwd: maintenanceRepo });
+  const cursorAgent = join(root, "missing cursor agent");
+  // Both Skill origins use the session's absolute helper; no shell environment
+  // inheritance or client installation path determines the selected runner.
+  for (const skillDirectory of [nativeSkill, importedSkill]) {
+    const decision = JSON.parse(await run(maintenance.executable,
+      [maintenance.helper, "maintain", "--repo", maintenanceRepo, "--dry-run"], {
+        cwd: skillDirectory,
+        env: { ...env, ...maintenance.env, MEMORAX_CODE_CURSOR_AGENT_COMMAND: cursorAgent },
+      }));
+    assert.equal(decision.ok, true);
+    assert.equal(decision.reason, "bundle_missing");
+    assert.equal(decision.job.dryRun, true);
+    assert.equal(decision.job.runner, "cursor");
+    assert.equal(decision.job.repo, maintenanceRepo);
+    assert.equal(decision.job.execution, "native-subagent");
+    assert.equal(decision.job.command, undefined);
+    assert.equal(decision.job.delegation, undefined, "Dry runs must not issue claim tickets");
+  }
+  assert.equal(requests.length, 0, "Maintenance dry runs must not call the provider");
+  await assert.rejects(stat(join(stateHome, "repo-memory-jobs")), { code: "ENOENT" });
+  const managedAgentPath = join(cursorHome, "agents", "memorax-repo-memory.md");
+  assert.match(await readFile(managedAgentPath, "utf8"), /is_background: true/);
+  const nativeJob = async (...args) => JSON.parse(await run(maintenance.executable,
+    [maintenance.helper, ...args], { expectedCode: args[0] === "abort" ? 1 : 0, env: { ...env, ...maintenance.env,
+      MEMORAX_CODE_CURSOR_AGENT_COMMAND: cursorAgent } }));
+  const reserved = await nativeJob("maintain", "--repo", maintenanceRepo);
+  assert.equal(reserved.job.status, "requested");
+  assert.equal(reserved.job.delegation.name, "memorax-repo-memory");
+  assert.equal(reserved.job.delegation.background, true);
+  const duplicate = await nativeJob("maintain", "--repo", maintenanceRepo);
+  assert.equal(duplicate.reason, "active_job");
+  assert.equal(duplicate.job.delegation, undefined);
+  const invocationLine = reserved.job.delegation.prompt.split("\n").find((line) => line.startsWith('{"executable":'));
+  const invocation = JSON.parse(invocationLine);
+  assert.equal(invocation.executable, process.execPath);
+  assert.equal(invocation.args[0], maintenance.helper);
+  assert.deepEqual(invocation.env, maintenance.env);
+  const claimed = await nativeJob(...invocation.args.slice(1));
+  assert.equal(claimed.status, "claimed");
+  assert.match(claimed.instructions, /repo-build\.md/);
+  const aborted = await nativeJob("abort", "--repo", maintenanceRepo, "--job", reserved.job.jobId,
+    "--run", reserved.job.runId, "--claim-token", claimed.claimToken, "--reason", "cancelled");
+  assert.equal(aborted.status, "failed");
+  assert.equal(aborted.failureReason, "cancelled");
+  assert.equal(requests.length, 0, "Native job coordination must not call MemoraX");
   const prompt = "Use English for this synthetic Cursor fixture.";
   const reply = "I will use English for this synthetic Cursor fixture.";
   assert.equal(JSON.parse(await hook("beforeSubmitPrompt", { prompt })).continue, true);
@@ -136,8 +200,9 @@ try {
   assert.equal(removed.npmPackageRemoval.skipped, true);
   assert.deepEqual(JSON.parse(await readFile(hooksPath, "utf8")), userConfig);
   await assert.rejects(stat(join(cursorHome, "skills", "memorax-code")), { code: "ENOENT" });
+  await assert.rejects(stat(managedAgentPath), { code: "ENOENT" });
   await stat(join(packageRoot, "package.json"));
-  console.log("Cursor npm package smoke: installed Hooks → native SQLite → exact Add; no transcript, deduplication and cleanup passed.");
+  console.log("Cursor npm package smoke: installed Hooks → native SQLite → exact Add; native/imported Skill maintenance delegates without Cursor CLI; no transcript, deduplication and cleanup passed.");
 } finally {
   let cleanupError;
   try { await run(process.execPath, [cli, "stop", ...lifecycleArgs]); }
@@ -151,7 +216,7 @@ try {
 
 function run(command, args, options = {}) {
   return new Promise((accept, reject) => {
-    const child = spawn(command, args, { env: options.env ?? env, cwd: workspace, shell: options.shell ?? false, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(command, args, { env: options.env ?? env, cwd: options.cwd ?? workspace, shell: options.shell ?? false, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     const timeout = setTimeout(() => child.kill(), 20_000);
@@ -160,9 +225,17 @@ function run(command, args, options = {}) {
     child.on("error", (error) => { clearTimeout(timeout); reject(error); });
     child.on("close", (code) => {
       clearTimeout(timeout);
-      if (code === 0) accept(stdout);
+      if (code === (options.expectedCode ?? 0)) accept(stdout);
       else reject(new Error("Cursor package fixture command failed (" + code + "): " + stdout + stderr));
     });
     child.stdin.end(options.input ?? "");
   });
+}
+
+async function commandDirectory(command) {
+  for (const directory of String(process.env.PATH ?? "").split(delimiter).filter(Boolean)) {
+    const candidate = join(directory, process.platform === "win32" ? `${command}.exe` : command);
+    if ((await stat(candidate).catch(() => undefined))?.isFile()) return directory;
+  }
+  return undefined;
 }

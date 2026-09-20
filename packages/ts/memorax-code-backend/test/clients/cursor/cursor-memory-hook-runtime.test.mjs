@@ -141,6 +141,119 @@ test("Cursor automatic Add excludes native Hook reminders and keeps the user-tex
   });
 });
 
+test("Cursor excludes native subagent users and simulated completions even with matching Hook identities", async (t) => {
+  for (const kind of ["subagent", "simulated"]) await t.test(kind, async () => {
+    const f = await fixture(); const { instance, writes } = runtime(f);
+    try {
+      // A valid Hook envelope cannot turn a task-generated native user into
+      // ordinary user authority, even if future clients emit complete IDs.
+      await instance.recordTurnStart(f.start);
+      const excludedUser = kind === "subagent"
+        ? f.blob(nativeMessage(nativeField(1, prompt)))
+        : f.user({ text: prompt, simulated: true });
+      const excludedTurn = f.turn({ requestId: f.start.turnId, userRef: excludedUser,
+        stepRefs: [f.step({ text: answer })] });
+      f.write({ latestGenerationId: f.start.turnId, turns: [excludedTurn] });
+      await observeResponse(instance, f.start);
+      const rejected = await instance.writeback(stop(f.start));
+      const reason = kind === "subagent" ? "native_user_unsupported" : "native_user_simulated";
+      assert.equal(rejected.scheduled, false);
+      assert.equal(rejected.reason, reason);
+      assert.equal(writes.length, 0);
+      assert.equal((await readState(f)).active.state, "blocked");
+      assert.ok((await readState(f)).active.metadata);
+
+      // Excluded history must not suppress the next genuine user Turn.
+      const next = { ...f.start, turnId: randomUUID(), prompt: "A subsequent real user question." };
+      await instance.recordTurnStart(next);
+      f.write({ latestGenerationId: next.turnId, turns: [excludedTurn, f.native(next)] });
+      await observeResponse(instance, next);
+      assert.deepEqual(await instance.writeback(stop(next)), { ok: true, scheduled: true });
+      assert.equal(writes.length, 1);
+      assert.equal(writes[0].userText, next.prompt);
+      assert.equal(writes[0].assistantText, answer);
+    } finally { instance.close(); await f.cleanup(); }
+  });
+});
+
+test("Cursor native child metadata prevents registration before generation or content checks", async (t) => {
+  for (const childInfo of [
+    { parentComposerId: randomUUID(), rootParentConversationId: randomUUID(), subagentTypeName: "synthetic-maintenance" },
+    null,
+    "invalid",
+    {},
+  ]) await t.test(JSON.stringify(childInfo), async () => {
+    const f = await fixture(); const { instance, writes } = runtime(f);
+    try {
+      // Metadata can arrive before conversationState. Complete Hook IDs must
+      // not authorize Repo Memory dispatch for this native child session.
+      f.writeComposer({ composerId: f.sessionId, subagentInfo: childInfo });
+      assert.deepEqual(await instance.recordTurnStart(f.start), { ok: true, recorded: false });
+      await assert.rejects(readFile(cursorTurnStatePath(f.home, f.sessionId)), { code: "ENOENT" });
+      assert.equal(failures(f).length, 0);
+      assert.equal((await instance.writeback(stop(f.start))).reason, "start_missing");
+      assert.equal(writes.length, 0);
+    } finally { instance.close(); await f.cleanup(); }
+  });
+});
+
+test("Cursor failed native session classification records a content-free start diagnostic", async () => {
+  const f = await fixture(); const { instance } = runtime(f);
+  try {
+    f.setRow(`composerData:${f.sessionId}`, JSON.stringify({ composerId: randomUUID(), privateContent: prompt }));
+    assert.deepEqual(await instance.recordTurnStart(f.start), { ok: true, recorded: false });
+    const records = failures(f);
+    assert.equal(records.length, 1);
+    assert.equal(records[0].operation, "memory.turn-start");
+    assert.equal(records[0].errorCode, "CURSOR_DATABASE_NATIVE_FORMAT_INVALID");
+    for (const value of [prompt, answer, f.root, f.sessionId, f.start.turnId, "synthetic-secret"]) {
+      assert.equal(JSON.stringify(records).includes(value), false);
+    }
+  } finally { instance.close(); await f.cleanup(); }
+});
+
+test("Cursor late child metadata excludes otherwise ordinary native QA from writeback", async () => {
+  const f = await fixture(); const { instance, writes } = runtime(f);
+  try {
+    assert.equal((await instance.recordTurnStart(f.start)).recorded, true);
+    const native = f.append();
+    f.writeComposer({ composerId: f.sessionId, latestChatGenerationUUID: f.start.turnId,
+      conversationState: "~" + native.state.toString("base64"),
+      subagentInfo: { parentComposerId: randomUUID() } });
+    await observeResponse(instance, f.start);
+    assert.equal((await instance.writeback(stop(f.start))).reason, "native_user_unsupported");
+    assert.equal(writes.length, 0);
+  } finally { instance.close(); await f.cleanup(); }
+});
+
+test("Cursor root registration tolerates absent composer and root metadata without content", async (t) => {
+  for (const present of [false, true]) await t.test(String(present), async () => {
+    const f = await fixture(); const { instance } = runtime(f);
+    try {
+      if (present) f.writeComposer({ composerId: f.sessionId, subagentComposerIds: [randomUUID()] });
+      assert.equal((await instance.recordTurnStart(f.start)).recorded, true);
+      assert.equal((await readState(f)).active.turnId, f.start.turnId);
+    } finally { instance.close(); await f.cleanup(); }
+  });
+});
+
+test("Cursor child-session completion cannot consume the parent's matching generation", async () => {
+  const f = await fixture(); const { instance, writes } = runtime(f);
+  try {
+    await instance.recordTurnStart(f.start);
+    f.append();
+    const child = { ...f.start, sessionId: randomUUID() };
+    assert.equal((await observeResponse(instance, child)).reason, "start_missing");
+    assert.equal((await instance.writeback(stop(child))).reason, "start_missing");
+    assert.equal(writes.length, 0);
+    assert.equal((await readState(f)).active.state, "open");
+    assert.ok((await readState(f)).active.metadata);
+    await observeResponse(instance, f.start);
+    assert.deepEqual(await instance.writeback(stop(f.start)), { ok: true, scheduled: true });
+    assert.equal(writes.length, 1);
+  } finally { instance.close(); await f.cleanup(); }
+});
+
 test("Cursor distinguishes recorded starts from wrong-client, duplicate and retired acknowledgements", async () => {
   const f = await fixture(); const { instance } = runtime(f);
   try {

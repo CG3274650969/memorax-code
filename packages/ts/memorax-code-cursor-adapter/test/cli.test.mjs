@@ -20,6 +20,9 @@ test("Cursor CLI retains its recorded home across standalone lifecycle commands"
   const report = JSON.parse(status.stdout);
   assert.equal(report.cursorHome, cursorHome);
   assert.equal(report.cursorHooks.runtimeObserved, false);
+  assert.equal(report.cursorAgents.ok, true);
+  const agentPath = join(cursorHome, "agents", "memorax-repo-memory.md");
+  assert.match(await readFile(agentPath, "utf8"), /model: inherit\nis_background: true/);
 
   const hooksPath = join(cursorHome, "hooks.json");
   const hooks = await readFile(hooksPath, "utf8");
@@ -36,6 +39,7 @@ test("Cursor CLI retains its recorded home across standalone lifecycle commands"
     assert.equal(JSON.parse(result.stdout).cursorHome, cursorHome);
   }
   await assert.rejects(readFile(join(cursorHome, "skills", "memorax-code", "SKILL.md")), /ENOENT/);
+  await assert.rejects(readFile(agentPath), /ENOENT/);
   await assert.rejects(readFile(join(fixture.userHome, ".cursor", "hooks.json")), /ENOENT/);
 });
 
@@ -58,6 +62,9 @@ test("Cursor CLI text status agrees with readiness without changing JSON query s
   const ready = fixture.run([]);
   assert.equal(ready.status, 0, ready.stdout);
   assert.match(ready.stdout, /^status: ok\n/);
+  await rm(join(fixture.userHome, ".cursor", "agents", "memorax-repo-memory.md"));
+  assertNotReady();
+  assert.equal(fixture.run(["enable"]).status, 0);
   const disabled = fixture.run(["disable"]);
   assert.equal(disabled.status, 0, disabled.stderr);
   assert.match(disabled.stdout, /^disable: ok\n/);

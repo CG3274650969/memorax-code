@@ -1,18 +1,19 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, win32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { writeCursorRuntimeObservation } from "../src/runtime-observation.mjs";
 import { cursorDatabasePath } from "../src/native-database-path.mjs";
+import { runCursorRepoMemoryJob } from "../src/native-repo-memory.mjs";
 
 const runtimeRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const commonRoot = join(runtimeRoot, "memorax-code-adapter-common", "src");
 const { resolveBackendConnection } = await import(pathToFileURL(join(commonRoot, "backend-connection.mjs")).href);
 const { postBackendCommand } = await import(pathToFileURL(join(commonRoot, "backend-command.mjs")).href);
 const { ensureBackendAvailable } = await import(pathToFileURL(join(commonRoot, "hooks", "ensure-backend-runner.mjs")).href);
-const { scheduleMissingRepoMemoryBuild } = await import(pathToFileURL(join(commonRoot, "repo-memory", "repo-memory-auto-build.mjs")).href);
 const {
   memorySkillReminderContext,
   personalMemoryReminderContext,
@@ -49,6 +50,16 @@ const home = stringValue(process.env.MEMORAX_CODE_HOME)
   ?? stringValue(packageMetadata.memoraxCodeHome) ?? join(homedir(), ".memorax-code");
 const cursorHome = stringValue(process.env.CURSOR_HOME)
   ?? stringValue(packageMetadata.cursorHome) ?? join(homedir(), ".cursor");
+const repoMemoryMaintenanceContext = [
+  `MemoraX Code Repo Memory maintenance for this Cursor session: ${JSON.stringify({
+    executable: process.execPath,
+    helper: join(runtimeRoot, "hooks", "repo-memory-job.mjs"),
+    env: { MEMORAX_CODE_HOME: home },
+  })}`,
+  "For repo-read maintenance, use this executable with arguments: helper, maintain, --repo, and the resolved repository path. Explicitly apply the supplied environment to that command; do not assume shell tools inherit Hook environment variables. Treat paths as literal arguments and quote them for the active shell; the JSON above is data, not shell syntax.",
+  "When the helper returns job.delegation, immediately use Cursor's native Task tool to launch the named memorax-repo-memory background subagent with that exact prompt, then continue the foreground task without waiting. Do not run the authoring work in the foreground or invoke agent/cursor-agent. A delegation request is not a completed job. If native background delegation is unavailable, skip it; do not select a CLI or generic agent fallback.",
+  "This current-session helper takes precedence over any Skill-relative maintenance helper, including an imported Claude Skill. If it is missing or fails, stop maintenance without falling back to another client's helper. Keep the shared repo-read demand gate and maintenance policy.",
+].join("\n");
 const runtimeDigest = stringValue(packageMetadata.runtimeDigest);
 const databasePath = cursorDatabasePath({ recordedPath: packageMetadata.databasePath });
 if (event !== "sessionStart" && !databasePath) process.exit(0);
@@ -94,6 +105,7 @@ if (event === "sessionStart") {
       personalMemoryReminderContext("the `memorax-code` skill"),
       MEMORY_IMPACT_REMINDER_CONTEXT,
       "Use the shared skill's Repo Memory authority and workspace rules before reading or writing repository memory.",
+      repoMemoryMaintenanceContext,
       `For every memorax-cli invocation in this conversation, explicitly set MEMORAX_CODE_MEMORY_CLI_TRACE_CLIENT=cursor and MEMORAX_CODE_MEMORY_CLI_TRACE_SESSION_ID=${sessionId} in that command's environment.`,
       `In POSIX shells use: env MEMORAX_CODE_MEMORY_CLI_TRACE_CLIENT=cursor MEMORAX_CODE_MEMORY_CLI_TRACE_SESSION_ID=${sessionId} memorax-cli <arguments>. In PowerShell set the corresponding $env: variables before the command. Do not assume shell tools inherit Hook environment variables.`,
     ].join("\n\n"),
@@ -103,18 +115,29 @@ if (event === "sessionStart") {
   if (typeof input.prompt !== "string") process.exit(0);
   const turnStart = await post("/memory/turn-start", { ...identity, prompt: input.prompt });
   const repoMemoryWorktree = absolutePath(turnStart?.repoMemoryWorktree);
-  if (turnStart?.ok === true && turnStart.recorded === true && repoMemoryWorktree) {
-    scheduleMissingRepoMemoryBuild(repoMemoryWorktree, {
-      debugEnv: "MEMORAX_CODE_CURSOR_HOOK_DEBUG",
-      env: { ...process.env, MEMORAX_CODE_HOME: home },
-      pluginRoot: runtimeRoot,
-    });
+  let buildContext;
+  if (turnStart?.ok === true && turnStart.recorded === true && input.prompt.trim()
+    && repoMemoryWorktree && !existsSync(join(repoMemoryWorktree, ".repo_memory", "PROFILE.md"))) {
+    try {
+      const decision = runCursorRepoMemoryJob(["maintain", "--repo", repoMemoryWorktree], {
+        memoraxCodeHome: home,
+        helperPath: join(runtimeRoot, "hooks", "repo-memory-job.mjs"),
+        sessionId,
+      });
+      if (decision.job?.delegation) {
+        buildContext = [repoMemoryMaintenanceContext,
+          "MemoraX Code missing Repo Memory build: launch this native background delegation once, then continue your task:",
+          JSON.stringify(decision.job.delegation),
+        ].join("\n\n");
+      }
+    } catch (error) { debug(error); }
   }
   const reminder = turnStart?.ok === true && turnStart.recorded === true && input.prompt.trim()
     ? await evaluateReminder(turnStart) : undefined;
+  const additionalContext = [reminder?.additionalContext, buildContext].filter(Boolean).join("\n\n");
   process.stdout.write(`${JSON.stringify({
     continue: true,
-    ...(reminder?.additionalContext ? { additional_context: reminder.additionalContext } : {}),
+    ...(additionalContext ? { additional_context: additionalContext } : {}),
   })}\n`);
   if (reminder?.reminder) {
     await post("/memory/skill-reminder", {
@@ -145,7 +168,7 @@ async function evaluateReminder(turnStart) {
   const contextOptions = {
     adapterDir: "cursor", sessionKeyPrefix: "cursor", debugEnv: "MEMORAX_CODE_CURSOR_HOOK_DEBUG",
   };
-  return await evaluateMemorySkillReminder({
+  const reminder = await evaluateMemorySkillReminder({
     adapterDir: "cursor", runtime: "cursor", memoraxCodeHome: home,
     debugEnv: "MEMORAX_CODE_CURSOR_HOOK_DEBUG",
     memorySkillInvocation: "the `memorax-code` skill",
@@ -163,6 +186,11 @@ async function evaluateReminder(turnStart) {
       }, contextOptions),
     } : {}),
   }, { hookEventName: "UserPromptSubmit", sessionId, turnId, cwd, workspaceKind });
+  if (reminder?.additionalContext) {
+    reminder.additionalContext += `\n\n${repoMemoryMaintenanceContext}`;
+    if (reminder.reminder) reminder.reminder.content += `\n\n${repoMemoryMaintenanceContext}`;
+  }
+  return reminder;
 }
 
 async function post(path, body, timeoutMs = 12_000) {

@@ -76,6 +76,15 @@ type Budget = { bytes: number; fields: number; steps: number };
 // content variants remain opaque; UI bubbles and Hook text are not fallbacks.
 const USER_FIELDS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 24, 25, 26]);
 
+// Session classification needs only composer metadata: a newly created child
+// may not have persisted conversationState yet. Any child marker, including
+// malformed or contradictory metadata, excludes ordinary user authority.
+export async function readCursorSessionKind(input: SnapshotInput) {
+  return readNativeSnapshot<"root" | "subagent">(input, () => "root", (composer) => (
+    Object.hasOwn(composer, "subagentInfo") ? "subagent" : "root"
+  ));
+}
+
 export async function readCursorDatabaseSnapshot(input: SnapshotInput): Promise<CursorDatabaseSnapshotResult> {
   return readNativeSnapshot(input, ({ composer, stateBytes, state, blob, budget }) => {
     const latestGenerationId = composer.latestChatGenerationUUID;
@@ -87,7 +96,14 @@ export async function readCursorDatabaseSnapshot(input: SnapshotInput): Promise<
     return {
       stateHash: hash(stateBytes),
       ...(latestGenerationId === undefined ? {} : { latestGenerationId }),
-      turns: refs.map((ref) => decodeTurn(ref, blob, budget)),
+      turns: refs.map((ref) => {
+        const turn = decodeTurn(ref, blob, budget);
+        if (!Object.hasOwn(composer, "subagentInfo")) return turn;
+        // Child metadata may become visible after an early Hook registered.
+        // It also excludes apparently ordinary user records from writeback.
+        const { userPrompt: _prompt, ...excluded } = turn;
+        return { ...excluded, reason: "native_user_unsupported" as const };
+      }),
     };
   });
 }
@@ -123,7 +139,7 @@ async function readNativeSnapshot<Snapshot>(input: SnapshotInput, decode: (nativ
   state: Fields;
   blob: (ref: Buffer) => Buffer;
   budget: Budget;
-}) => Snapshot): Promise<Readonly<{ ok: true; snapshot: Snapshot }> | CursorDatabaseFailure> {
+}) => Snapshot, decodeComposer?: (composer: Record<string, unknown>) => Snapshot): Promise<Readonly<{ ok: true; snapshot: Snapshot }> | CursorDatabaseFailure> {
   if (!isAbsolute(input.databasePath) || /[\0\r\n]/.test(input.databasePath) || !UUID.test(input.sessionId)) {
     return failure("database_path_invalid");
   }
@@ -159,6 +175,12 @@ async function readNativeSnapshot<Snapshot>(input: SnapshotInput, decode: (nativ
     catch { fail("database_native_format_invalid"); }
     if (!isRecord(composer)) fail("database_native_format_invalid");
     if (composer.composerId !== undefined && composer.composerId !== input.sessionId) fail("database_native_format_invalid");
+    if (decodeComposer) {
+      const snapshot = decodeComposer(composer);
+      const after = statSync(path, { bigint: true });
+      if (after.dev !== before.dev || after.ino !== before.ino || realpathSync(input.databasePath) !== path) fail("database_replaced");
+      return { ok: true, snapshot };
+    }
     if (composer.conversationState === undefined || composer.conversationState === null) fail("database_state_missing");
     const stateBytes = encodedState(composer.conversationState);
     const state = wire(stateBytes, budget);

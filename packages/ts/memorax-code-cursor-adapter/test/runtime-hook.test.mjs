@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
+import { realpathSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { enableCursorAdapter } from "../src/config.mjs";
 import { cursorDatabasePath } from "../src/native-database-path.mjs";
@@ -90,6 +91,7 @@ test("Cursor sessionStart uses only native output fields and explicit per-comman
     assert.match(output.additional_context, /memorax-code.*skill/);
     assert.match(output.additional_context, /explicitly set MEMORAX_CODE_MEMORY_CLI_TRACE_CLIENT=cursor/);
     assert.match(output.additional_context, /Do not assume shell tools inherit Hook environment variables/);
+    assertMaintenanceContext(output.additional_context, fixture);
     assert.equal(fixture.requests.length, 0);
     const observed = JSON.parse(await readFile(join(fixture.home, "adapters", "cursor", "runtime-observed.json"), "utf8"));
     assert.equal(observed.runtimeDigest, fixture.runtimeDigest);
@@ -242,6 +244,7 @@ test("Cursor injects authorized personal memory on the first prompt and procedur
       assert.equal(context.includes("Run the focused Cursor test first"), index !== 1);
       assert.equal(context.includes("MemoraX Code reminder:"), index !== 1);
       assert.equal(context.includes("MemoraX Code personal-memory reminder:"), index === 0);
+      if (index !== 1) assertMaintenanceContext(context, fixture);
       assert.doesNotMatch(context, /unexpected automatic search result|\$memorax-code/);
       assert.deepEqual(Object.keys(output).sort(), index === 1 ? ["continue"] : ["additional_context", "continue"]);
       if (context) expectedReminders.push({
@@ -297,6 +300,7 @@ test("Cursor restores authorized profiles after compaction without advancing pro
     const restored = JSON.parse((await prompt(1)).stdout).additional_context;
     assert.match(restored, /Prefer concise Cursor answers/);
     assert.match(restored, /MemoraX Code personal-memory reminder:/);
+    assertMaintenanceContext(restored, fixture);
     assert.doesNotMatch(restored, /Run the focused Cursor test first|MemoraX Code reminder:/);
     assert.deepEqual(fixture.requests.filter(({ path }) => path === "/memory/skill-reminder").at(-1).body.triggers,
       ["post_compaction"]);
@@ -306,6 +310,7 @@ test("Cursor restores authorized profiles after compaction without advancing pro
     assert.deepEqual(JSON.parse((await prompt(2)).stdout), { continue: true });
     const cadence = JSON.parse((await prompt(3)).stdout).additional_context;
     assert.match(cadence, /Run the focused Cursor test first/);
+    assertMaintenanceContext(cadence, fixture);
     assert.doesNotMatch(cadence, /Prefer concise Cursor answers/);
     assert.deepEqual(fixture.requests.filter(({ path }) => path === "/memory/skill-reminder").at(-1).body.triggers,
       ["cadence"]);
@@ -373,8 +378,78 @@ test("Cursor requires a successful Backend result before consuming the first rem
     fixture.control.body = { ok: true, recorded: true };
     const result = await runHook(fixture, { hook_event_name: "beforeSubmitPrompt", prompt: "retry later" });
     assert.match(JSON.parse(result.stdout).additional_context, /MemoraX Code reminder:/);
+    assertMaintenanceContext(JSON.parse(result.stdout).additional_context, fixture);
   } finally { await fixture.close(); }
 });
+
+test("Cursor missing-bundle initialization delegates once using only the accepted worktree", async () => {
+  const fixture = await createFixture();
+  try {
+    const repo = join(fixture.root, "authorized repo");
+    await mkdir(repo);
+    for (const args of [["init", "--quiet"], ["config", "user.name", "Fixture"],
+      ["config", "user.email", "fixture@example.invalid"], ["config", "commit.gpgsign", "false"],
+      ["commit", "--quiet", "--allow-empty", "-m", "fixture"]]) execFileSync("git", args, { cwd: repo });
+    fixture.control.body.repoMemoryWorktree = repo;
+    const result = await runHook(fixture, { hook_event_name: "beforeSubmitPrompt", prompt: "inspect this repo" }, { MEMORAX_CODE_CURSOR_HOOK_DEBUG: "1" });
+    assert.equal(result.status, 0, result.stderr);
+    const context = JSON.parse(result.stdout).additional_context;
+    assert.match(context, /missing Repo Memory build: launch this native background delegation once/, result.stderr);
+    assert.match(context, /memorax-repo-memory/);
+    assert.match(context, /claim/);
+    const delegation = JSON.parse(context.split("\n").find(line => line.startsWith('{"name":"memorax-repo-memory"')));
+    const invocation = JSON.parse(delegation.prompt.split("\n").find(line => line.startsWith('{"executable":')));
+    assert.equal(invocation.args[invocation.args.indexOf("--repo") + 1], realpathSync(repo),
+      "Delegation must retain the Backend-authorized repository");
+    const repeat = await runHook(fixture, { hook_event_name: "beforeSubmitPrompt", prompt: "inspect this repo" });
+    assert.doesNotMatch(repeat.stdout, /missing Repo Memory build/);
+    assert.equal(fixture.requests.filter(({ path }) => path === "/memory/skill-reminder").length, 1);
+    assert.doesNotMatch(fixture.requests.find(({ path }) => path === "/memory/skill-reminder").body.content,
+      /--ticket/, "Private delegation tickets must not be copied into reminder trace records");
+  } finally { await fixture.close(); }
+});
+
+test("Cursor skips native initialization without real-prompt and repository authority", async () => {
+  const fixture = await createFixture();
+  try {
+    const repo = join(fixture.root, "repo");
+    await mkdir(repo);
+    for (const args of [["init", "--quiet"], ["config", "user.name", "Fixture"],
+      ["config", "user.email", "fixture@example.invalid"], ["config", "commit.gpgsign", "false"],
+      ["commit", "--quiet", "--allow-empty", "-m", "fixture"]]) execFileSync("git", args, { cwd: repo });
+    for (const [body, prompt] of [
+      [{ ok: true, recorded: true, repoMemoryWorktree: repo }, "  "],
+      [{ ok: true, recorded: false, repoMemoryWorktree: repo }, "question"],
+      [{ ok: true, recorded: true }, "question"],
+      [{ ok: true, recorded: true, repoMemoryWorktree: "relative" }, "question"],
+    ]) {
+      fixture.control.body = body;
+      assert.doesNotMatch((await runHook(fixture, { hook_event_name: "beforeSubmitPrompt", prompt })).stdout,
+        /missing Repo Memory build/);
+    }
+    await mkdir(join(repo, ".repo_memory"));
+    await writeFile(join(repo, ".repo_memory", "PROFILE.md"), "Existing profile: read-triggered maintenance owns validation.");
+    fixture.control.body = { ok: true, recorded: true, repoMemoryWorktree: repo };
+    assert.doesNotMatch((await runHook(fixture, { hook_event_name: "beforeSubmitPrompt", prompt: "question" })).stdout,
+      /missing Repo Memory build/);
+    await assert.rejects(readFile(join(fixture.home, "repo-memory-jobs")), { code: "ENOENT" });
+  } finally { await fixture.close(); }
+});
+
+function assertMaintenanceContext(context, fixture) {
+  const prefix = "MemoraX Code Repo Memory maintenance for this Cursor session: ";
+  const line = context.split("\n").find(line => line.startsWith(prefix));
+  assert.ok(line, "Cursor must supply its own maintenance entrypoint without shell environment inheritance");
+  assert.deepEqual(JSON.parse(line.slice(prefix.length)), {
+    executable: process.execPath,
+    helper: realpathSync(join(dirname(fixture.runtimePath), "repo-memory-job.mjs")),
+    env: { MEMORAX_CODE_HOME: fixture.home },
+  });
+  assert.match(context, /native Task tool/);
+  assert.match(context, /foreground task without waiting/);
+  assert.match(context, /takes precedence over any Skill-relative maintenance helper, including an imported Claude Skill/);
+  assert.match(context, /stop maintenance without falling back to another client's helper/);
+}
 
 function generationId(index) {
   return `33333333-3333-4333-8333-${String(index).padStart(12, "0")}`;

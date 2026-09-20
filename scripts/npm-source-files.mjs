@@ -22,7 +22,7 @@ export const npmMainSourceTrees = Object.freeze([
     source: `packages/ts/memorax-code-trae-adapter/${name}`,
     destination: `lib/memorax-code-trae-adapter/${name}`,
   })),
-  ...["src", "hooks"].map((name) => ({
+  ...["src", "hooks", "agents"].map((name) => ({
     source: `packages/ts/memorax-code-cursor-adapter/${name}`,
     destination: `lib/memorax-code-cursor-adapter/${name}`,
   })),

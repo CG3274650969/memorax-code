@@ -29,12 +29,20 @@ test("memorax-code repo-read reference silently schedules supervised maintenance
   assert.match(skill, /Skip this reference for narrow tasks with a clear live-code target/);
   assert.match(skill, /## Single Maintenance Handoff/);
   assert.match(skill, /repo-memory-job\.mjs' maintain --repo/);
+  assert.match(skill, /Prefer the Repo Memory maintenance helper supplied by the current client's\s+native session context/);
+  assert.match(skill, /even when this Skill was imported from another client/);
+  assert.match(skill, /Only when no current-session helper was supplied, use the packaged helper/);
+  assert.match(skill, /current-session helper is missing or fails, skip maintenance; never fall back to\s+the Skill-relative helper or another client's runner/);
   assert.match(skill, /`bundle_missing`/);
   assert.match(skill, /`bundle_invalid`/);
   assert.match(skill, /`up_to_date`/);
   assert.match(skill, /`active_job`/);
   assert.match(skill, /Do not wait, poll, retry, or expose/);
   assert.match(skill, /Never replace the packaged helper with a generic subagent/);
+  assert.match(skill, /helper returns `job\.delegation`/);
+  assert.match(skill, /Cursor native background subagent through the Task tool/);
+  assert.match(skill, /claim the\nprovided ticket before authoring and finalize through the helper/);
+  assert.match(skill, /Never invent a delegation when the helper returned `active_job` or `up_to_date`/);
 });
 
 test("memorax-code repo-read delegates deterministic maintenance decisions only on relevant demand", () => {

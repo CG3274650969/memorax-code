@@ -6,7 +6,7 @@ import type { RepositoryMemoryScope } from "../../repository/scope.js";
 import type { MemoryTurnState } from "../../memory/turn-coordinator.js";
 import { traceContextFromCursorHookBody, type TraceContext } from "../../trace/context.js";
 import { markCurrentTraceTurnOutcome, recordTraceEvent, traceTurnEventId } from "../../trace/store.js";
-import { readCursorCompactionSnapshot, readCursorDatabaseSnapshot } from "./database-snapshot.js";
+import { readCursorCompactionSnapshot, readCursorDatabaseSnapshot, readCursorSessionKind } from "./database-snapshot.js";
 import { recordCursorFailure, type CursorFailureContext } from "./diagnostics.js";
 import { captureCursorCompaction, consumeCursorCompaction } from "./compaction.js";
 import { captureCursorContinuation, cursorTextDigest, selectCursorDatabaseTurn } from "./database-turn.js";
@@ -260,6 +260,14 @@ export function createCursorMemoryHookRuntime(
 
     async recordTurnStart(command) {
       if (command.client !== "cursor") return { ok: true, recorded: false };
+      const sessionKind = await readCursorSessionKind(command);
+      // First prompts can precede the native database/composer. Positive child
+      // metadata must still stop registration before scope, trace or scheduling.
+      if (sessionKind.ok && sessionKind.snapshot === "subagent") return { ok: true, recorded: false };
+      if (!sessionKind.ok && !["database_session_missing", "database_unavailable"].includes(sessionKind.reason)) {
+        reportFailure("memory.turn-start", sessionKind.reason, command);
+        return { ok: true, recorded: false };
+      }
       const createdAt = now();
       const traceContext = traceContextFromCursorHookBody(command, new Date(createdAt).toISOString());
       try {

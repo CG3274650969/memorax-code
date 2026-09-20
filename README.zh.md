@@ -137,7 +137,7 @@ memorax-code account --show-mark-id
 | DeepSeek Harness | 重启或刷新 DSH，加载已注册到现有 Profile 中的插件。 |
 | OpenCode | 重启或刷新客户端，自动发现受管插件和 Skill。 |
 | Trae | 打开 **设置 → Hooks → 全局 → 已配置的 Hooks**，开启已注册的 Global Hooks。setup 会安装 Hooks 和 Skill，但这个开关需要手动开启一次。 |
-| Cursor | 重启或刷新 Cursor，再新建对话，加载原生用户 Hooks 和共享 Skill。 |
+| Cursor | 重启或刷新 Cursor，再新建对话，加载原生用户 Hooks、共享 Skill 和受管后台子 Agent。 |
 
 Cursor 独立安装到 `~/.cursor/hooks.json` 和 `~/.cursor/skills/memorax-code/`，不依赖
 Claude Code，setup 会保留 Cursor 的第三方集成开关。Search 和主动 Add 通过 Skill 调用 CLI；
@@ -146,7 +146,8 @@ Claude Code，setup 会保留 Cursor 的第三方集成开关。Search 和主动
 Prompt Hook 会在首个符合条件的轮次注入可信工作区中的 User Profile 偏好，并按配置的提醒周期
 注入 Procedure Memory。记录的压缩经原生数据库验证后，会在下一个非空且成功注册的 Prompt
 恢复 Profile 与个人记忆提醒；Procedure 仍遵循原有周期。缺少证据时跳过恢复，不保证在同一个
-持续执行的任务中立即恢复。自动 Prompt 检索仍保持关闭。详见
+持续执行的任务中立即恢复。自动 Prompt 检索仍保持关闭。Repo Memory 初建和按策略维护使用
+Cursor 原生后台子 Agent，无需单独安装或登录 Cursor CLI；执行工具时仍遵循 Cursor 的正常授权。详见
 [Cursor 配置](docs/configuration.md#cursor-integration-paths)。
 
 打开项目，新建客户端会话并发送一次 Prompt，然后在项目目录中运行：
@@ -230,7 +231,7 @@ MemoraX Code 会先比较含义：语义相同的请求不重复写入；长期�
 | **用户偏好延续** | 在 User Profile 中记录用户偏好，并按设定周期将其带入后续任务。 |
 | **Procedure 自动复用** | 记录可复用的任务流程，并在后续任务中自动提醒 Agent 按流程执行。 |
 | **记忆作用反馈** | 在 Codex、Claude Code、CodeBuddy CLI、WorkBuddy、DeepSeek Harness、OpenCode、Trae 和 Cursor 中，当本轮主动 Search 的 Coding Memory，或本轮读取、注入的 Repo、Procedure、Profile Memory 确实指导了任务时，Agent 会在最终回复开头用自然语言简要说明。 |
-| **Repo Memory 后台整理** | 在支持无头任务的客户端中后台整理仓库结构、代码入口和历史证据，并按策略自动更新，避免反复搜索和总结。Trae 仍仅支持 Skill；Cursor 在可用的无头 Agent CLI 下可自动启动受监督的首次构建。 |
+| **Repo Memory 后台整理** | 在支持后台任务的客户端中整理仓库结构、代码入口和历史证据，并按策略自动更新，避免反复搜索和总结。Trae 仍仅支持 Skill；Cursor 使用原生后台子 Agent 完成初建和维护。 |
 | **主动记忆控制** | 使用内置的 MemoraX Code Skill 或 CLI，主动查找和添加记忆。 |
 | **客户端集成** | 与 Codex、Claude Code、CodeBuddy CLI、WorkBuddy、DeepSeek Harness、OpenCode、Trae 和 Cursor 集成，触发记忆检索、提醒和写入。目前 Codex、Claude Code、CodeBuddy CLI、WorkBuddy、OpenCode 和 Trae 支持自动额度提醒。 |
 | **本地可观测性** | 通过受内容控制的本地 trace 和 reconciliation 记录查看活动统计、召回与写入状态。 |

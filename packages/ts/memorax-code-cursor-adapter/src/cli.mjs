@@ -30,7 +30,8 @@ try {
     && result.installed === true
     && result.enabled === true
     && result.cursorHooks?.ok === true
-    && result.cursorSkills?.ok === true;
+    && result.cursorSkills?.ok === true
+    && result.cursorAgents?.ok === true;
   const ok = parsed.command === "status" ? ready : result.ok === true;
   if (parsed.json) console.log(JSON.stringify(result, null, 2));
   else console.log(`${result.action}: ${ok ? "ok" : "failed"}\nhome: ${result.cursorHome ?? parsed.home ?? defaultCursorHome()}`);
