@@ -146,6 +146,29 @@ test("npm registry JSON preserves recognized causes without retaining response t
   })), {});
 });
 
+test("update diagnostics relay all eight client failures including Cursor within the input bound", async (t) => {
+  const { diagnostics, memoraxCodeHome } = await fixture(t);
+  const clients = ["codex", "claude", "dsh", "opencode", "codebuddy", "workbuddy", "trae", "cursor"];
+  const clientFailures = clients.map((client, index) => ({
+    client,
+    failure: { errorCode: "CLIENT_HOOKS_WRITE_FAILED", stage: "hooks-write", systemCode: "EACCES",
+      error: "private-client-failure-canary" },
+    diagnostic: { id: `mc-1000000000000-11111111-1111-4111-8111-${String(index + 1).padStart(12, "0")}`, recorded: true },
+  }));
+  const failure = new diagnostics.UpdateFailure("UPDATE_RECONCILE_FAILED", "reconcile", {
+    commandResult: { exitCode: 7, stdout: JSON.stringify({
+      backend: { ok: true }, clientFailures: [...clientFailures, clientFailures[0]],
+    }) },
+  });
+  assert.deepEqual(failure.children.map(child => child.fields.client), clients);
+  assert.deepEqual(failure.children.map(child => child.diagnostic.id), clientFailures.map(child => child.diagnostic.id));
+  const output = [];
+  diagnostics.reportUpdateFailure(failure, { home: memoraxCodeHome, write: line => output.push(line) });
+  assert.equal(output.filter(line => line.startsWith("Diagnostic:")).length, clients.length);
+  assert.match(output.join("\n"), /CLIENT_HOOKS_WRITE_FAILED.*cursor\.hooks-write/);
+  assert.doesNotMatch(output.join("\n"), /private-client-failure-canary|UPDATE_RECONCILE_FAILED/);
+});
+
 test("automatic setup reuses a child diagnostic and deduplicates IPC messages", async (t) => {
   const { api, diagnostics, root, memoraxCodeHome } = await fixture(t);
   const completionPath = join(memoraxCodeHome, "runtime", "setup", "setup-completion.json");
