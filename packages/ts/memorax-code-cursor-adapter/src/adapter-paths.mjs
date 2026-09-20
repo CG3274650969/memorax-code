@@ -41,6 +41,7 @@ export function cursorInstallationDetected({
   pathExists = existsSync,
 } = {}) {
   if (stringOption(env.CURSOR_HOME)) return true;
+  if (pathExists(defaultCursorHome(env, home))) return true;
   return cursorApplicationCandidates({ env, home, platform }).some(pathExists);
 }
 

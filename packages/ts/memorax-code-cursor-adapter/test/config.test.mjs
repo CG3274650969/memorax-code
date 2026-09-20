@@ -14,14 +14,16 @@ import { writeCursorRuntimeObservation } from "../src/runtime-observation.mjs";
 const events = ["sessionStart", "beforeSubmitPrompt", "preCompact", "afterAgentResponse", "stop"];
 const agentSource = "---\nname: memorax-repo-memory\nmodel: inherit\nis_background: true\n---\n\n<!-- memorax-code-cursor-repo-memory-agent-v1 -->\n\nAgent fixture.\n";
 
-test("Cursor discovery honors home overrides and actual platform installations", () => {
+test("Cursor discovery honors home overrides, existing data, and platform installations", () => {
   const home = join(tmpdir(), "cursor-discovery");
   assert.equal(defaultCursorHome({}, home), join(home, ".cursor"));
   assert.equal(defaultCursorHome({ CURSOR_HOME: join(home, "custom") }, home), join(home, "custom"));
   assert.equal(cursorInstallationDetected({ env: {}, home, platform: "darwin",
     pathExists: path => path === "/Applications/Cursor.app" }), true);
   assert.equal(cursorInstallationDetected({ env: {}, home, platform: "linux",
-    pathExists: path => path === join(home, ".cursor") }), false);
+    pathExists: path => path === join(home, ".cursor") }), true);
+  assert.equal(cursorInstallationDetected({ env: {}, home, platform: "linux",
+    pathExists: () => false }), false);
   assert.equal(cursorInstallationDetected({ env: { CURSOR_HOME: join(home, "custom") },
     pathExists: () => false }), true);
   assert.equal(cursorInstallationDetected({ env: { LOCALAPPDATA: "C:\\Users\\Test\\AppData\\Local" },

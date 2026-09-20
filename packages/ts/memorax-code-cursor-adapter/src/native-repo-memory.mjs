@@ -1,5 +1,6 @@
+import { spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -64,7 +65,14 @@ function prepare(request, runtime) {
       validatorPath: runtime.validatorPath, parentSessionId: runtime.sessionId, ticketHash: hash(ticket),
     };
     writeState(runtime, state);
-    writeMarker(runtime, state);
+    try {
+      state.leasePid = startLeaseGuard(runtime, state);
+      writeState(runtime, state);
+      writeMarker(runtime, state);
+    } catch (error) {
+      finishState(runtime, state, "lease_guard_start_failed");
+      throw error;
+    }
     return {
       ...summary(runtime, state), alreadyRunning: false,
       delegation: {
@@ -157,7 +165,7 @@ function authorize(request, runtime, state, status) {
   if (state.status !== status) return rejected("invalid_job_status");
   if (runtime.now() >= Date.parse(state.expiresAt)) return finishState(runtime, state, "lease_expired");
   const marker = readActiveRepoMemoryJobMarker({ memoraxCodeHome: runtime.home, repoRealpath: state.repo });
-  if (!marker.active || marker.reason === "invalid_lease" || marker.marker?.jobId !== state.jobId || marker.marker?.runId !== state.runId || marker.marker?.leaseExpiresAt !== state.expiresAt || marker.marker?.startedAt !== (state.claimedAt || state.startedAt)) return rejected("job_ownership_lost");
+  if (!Number.isSafeInteger(state.leasePid) || marker.marker?.pid !== state.leasePid || !marker.active || marker.reason === "invalid_lease" || marker.marker?.jobId !== state.jobId || marker.marker?.runId !== state.runId || marker.marker?.leaseExpiresAt !== state.expiresAt || marker.marker?.startedAt !== (state.claimedAt || state.startedAt)) return rejected("job_ownership_lost");
   return undefined;
 }
 
@@ -181,10 +189,69 @@ function finishState(runtime, state, failureReason) {
 function writeMarker(runtime, state) {
   const markerInfo = markerPathForRepo(runtime.home, state.repo);
   writePrivateJsonRecord(markerInfo.markerPath, {
-    version: 2, ownerKind: "lease", repo: state.repo, repoKey: markerInfo.repoKey,
+    // Retain the v1 envelope for immutable older runtimes sharing this path.
+    version: 1, ownerKind: "lease", pid: state.leasePid, repo: state.repo, repoKey: markerInfo.repoKey,
     mode: state.mode, runner: "cursor", jobId: state.jobId, runId: state.runId,
+    outputLogPath: join(dirname(jobPath(runtime, state.jobId)), "output.log"),
+    finalMessagePath: join(dirname(jobPath(runtime, state.jobId)), "final-message.md"),
     jobPath: jobPath(runtime, state.jobId), startedAt: state.claimedAt || state.startedAt, leaseExpiresAt: state.expiresAt,
   }, { durableBoundary: runtime.home });
+}
+
+function startLeaseGuard(runtime, state) {
+  const readyPath = join(dirname(jobPath(runtime, state.jobId)), "lease-ready.json");
+  const child = spawn(process.execPath, [runtime.helperPath, "lease-guard", runtime.home, state.repo, state.jobId, state.runId], {
+    detached: true, stdio: "ignore", windowsHide: true,
+  });
+  child.on("error", () => {});
+  child.unref();
+  if (!Number.isSafeInteger(child.pid) || child.pid <= 0) throw new Error("native repo memory lease guard could not start");
+  const deadline = Date.now() + 2000;
+  try {
+    while (Date.now() < deadline) {
+      if (existsSync(readyPath)) {
+        const ready = JSON.parse(readFileSync(readyPath, "utf8"));
+        if (ready.pid !== child.pid || ready.jobId !== state.jobId || ready.runId !== state.runId) break;
+        process.kill(child.pid, 0);
+        return child.pid;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+    throw new Error("native repo memory lease guard did not become ready");
+  } finally {
+    rmSync(readyPath, { force: true });
+  }
+}
+
+// This process supplies legacy PID liveness only; it never executes a model,
+// authors repository files, or claims to terminate the native Cursor child.
+export async function holdCursorRepoMemoryLease(args) {
+  const [home, repo, jobId, runId] = args;
+  if (args.length !== 4 || !home || !repo || !JOB_ID.test(jobId || "") || !RUN_ID.test(runId || "")) throw new Error("invalid lease guard identity");
+  const runtime = { home: resolve(home) };
+  const path = jobPath(runtime, jobId);
+  const initial = JSON.parse(readFileSync(path, "utf8"));
+  const hardDeadline = Date.parse(initial.startedAt) + REQUEST_MS + LEASE_MS;
+  if (initial.schema !== SCHEMA || initial.repo !== repo || initial.jobId !== jobId || initial.runId !== runId || initial.status !== "requested" || !Number.isFinite(hardDeadline)) throw new Error("invalid lease guard job");
+  // Report readiness before taking the lock: prepare holds it while waiting.
+  writePrivateJsonRecord(join(dirname(path), "lease-ready.json"), { pid: process.pid, jobId, runId }, { durableBoundary: runtime.home });
+  while (Date.now() < hardDeadline) {
+    if (!existsSync(path)) return;
+    const acquired = tryAcquireRepoMemoryStartupLock({ memoraxCodeHome: runtime.home, repoRealpath: repo });
+    if (acquired.acquired) {
+      try {
+        const state = JSON.parse(readFileSync(path, "utf8"));
+        const marker = JSON.parse(readFileSync(markerPathForRepo(runtime.home, repo).markerPath, "utf8"));
+        const start = Date.parse(state.claimedAt || state.startedAt), expiry = Date.parse(state.expiresAt);
+        if (state.schema !== SCHEMA || state.repo !== repo || state.jobId !== jobId || state.runId !== runId || state.leasePid !== process.pid
+          || !["requested", "claimed", "validating"].includes(state.status)
+          || !Number.isFinite(start) || !Number.isFinite(expiry) || expiry <= start || expiry - start > LEASE_MS || expiry > hardDeadline || Date.now() >= expiry
+          || marker.jobId !== jobId || marker.runId !== runId || marker.pid !== process.pid || marker.leaseExpiresAt !== state.expiresAt) return;
+      } catch { return; }
+      finally { releaseRepoMemoryStartupLock(acquired.lock); }
+    }
+    await new Promise(resolveWait => setTimeout(resolveWait, 250));
+  }
 }
 
 function summary(runtime, state) {

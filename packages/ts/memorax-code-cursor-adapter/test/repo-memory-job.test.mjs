@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,7 @@ import test from "node:test";
 import { runCursorRepoMemoryJob } from "../src/native-repo-memory.mjs";
 import { markerPathForRepo, readActiveRepoMemoryJobMarker, writeRepoMemoryJobMarker } from "../../memorax-code-adapter-common/src/repo-memory/repo-memory-job-marker.mjs";
 import { runRepoMemoryJob } from "../../memorax-code-adapter-common/src/repo-memory/repo-memory-job-supervisor.mjs";
+import { readActiveRepoMemoryJobMarker as readLegacyMarker } from "./fixtures/legacy-repo-memory-job-marker.mjs";
 
 const adapterRoot = realpathSync(fileURLToPath(new URL("..", import.meta.url)));
 const jobHook = join(adapterRoot, "hooks/repo-memory-job.mjs");
@@ -25,7 +26,7 @@ test("Cursor native dry-run needs no Agent CLI and creates no job or lease", (t)
   assert.equal(existsSync(join(f.home, "repo-memory-jobs")), false);
 });
 
-test("Cursor delegates a private one-use claim then validates completion independently of prose", (t) => {
+test("Cursor delegates a private one-use claim then validates completion independently of prose", async (t) => {
   const f = fixture(t);
   const job = prepare(f);
   assert.equal(job.status, "requested");
@@ -35,6 +36,7 @@ test("Cursor delegates a private one-use claim then validates completion indepen
   assert.ok(Date.parse(job.expiresAt) - Date.now() <= 5 * 60 * 1000);
   assert.equal(JSON.parse(readFileSync(job.jobPath)).pid, undefined);
   if (process.platform !== "win32") assert.equal(statSync(job.jobPath).mode & 0o777, 0o600);
+  const leasePid = active(f).marker.pid;
   const claim = claimJob(f, job);
   assert.equal(claim.status, "claimed");
   assert.ok(Date.parse(claim.expiresAt) > Date.parse(job.expiresAt));
@@ -50,6 +52,7 @@ test("Cursor delegates a private one-use claim then validates completion indepen
   assert.equal(active(f).active, false);
   const replay = transition(f, "finish", job, ["--claim-token", claim.claimToken]);
   assert.equal(replay.reason, "invalid_job_status");
+  await waitForProcessExit(leasePid);
 });
 
 test("Cursor native claims remain usable when consecutive clock reads advance", (t) => {
@@ -90,6 +93,25 @@ test("Cursor and other runners share repository single-flight ownership", (t) =>
   assert.equal(otherOwns.job.jobId, "other-client-job");
 });
 
+test("legacy runtimes preserve requested and claimed Cursor repository ownership", (t) => {
+  const f = fixture(t), job = prepare(f);
+  const markerPath = markerPathForRepo(f.home, f.repo).markerPath;
+  const legacy = () => readLegacyMarker({ memoraxCodeHome: f.home, repoRealpath: f.repo });
+  const requested = legacy();
+  assert.equal(requested.active, true, "legacy runtime must retain requested ownership: " + requested.reason);
+  assert.equal(requested.marker.jobId, job.jobId);
+  assert.equal(existsSync(markerPath), true);
+  const claim = claimJob(f, job);
+  assert.equal(claim.status, "claimed");
+  const claimed = legacy();
+  assert.equal(claimed.active, true, "legacy runtime must retain claimed ownership: " + claimed.reason);
+  assert.equal(claimed.marker.jobId, job.jobId);
+  assert.equal(claimed.marker.pid, requested.marker.pid);
+  assert.equal(existsSync(markerPath), true);
+  profile(f, f.head);
+  assert.equal(transition(f, "finish", job, ["--claim-token", claim.claimToken]).status, "succeeded");
+});
+
 test("concurrent Cursor processes publish one delegation and only one claimant", async (t) => {
   const f = fixture(t);
   const driver = join(f.root, "driver.mjs");
@@ -100,10 +122,51 @@ test("concurrent Cursor processes publish one delegation and only one claimant",
   assert.equal(decisions.filter(r => r.job?.delegation).length, 1);
   assert.equal(new Set(decisions.map(r => r.job.jobId)).size, 1);
   const job = decisions.find(r => r.job?.delegation).job;
+  const legacyRequested = readLegacyMarker({ memoraxCodeHome: f.home, repoRealpath: f.repo });
+  assert.equal(legacyRequested.active, true, "ownership must survive helper exit: " + legacyRequested.reason);
+  assert.ok(results.every(r => r.pid !== legacyRequested.marker.pid), "owner PID must outlive the preparing helpers");
+  assert.doesNotThrow(() => process.kill(legacyRequested.marker.pid, 0));
   const args = ["claim", "--repo", f.repo, "--job", job.jobId, "--run", job.runId, "--ticket", ticket(job)];
   const claimed = (await Promise.all([1, 2].map(() => runAsync(driver, args)))).map(r => JSON.parse(r.stdout));
   assert.equal(claimed.filter(r => r.status === "claimed").length, 1);
   assert.equal(claimed.filter(r => r.ok === false).length, 1);
+  const legacyClaimed = readLegacyMarker({ memoraxCodeHome: f.home, repoRealpath: f.repo });
+  assert.equal(legacyClaimed.active, true, "ownership must survive claimant exit: " + legacyClaimed.reason);
+  assert.equal(legacyClaimed.marker.pid, legacyRequested.marker.pid);
+});
+
+test("unclaimed Cursor lease guards stop at the requested expiry", async (t) => {
+  const f = fixture(t);
+  f.options.leaseMs = 1500;
+  const job = prepare(f), pid = active(f).marker.pid;
+  await waitForProcessExit(pid);
+  assert.ok(Date.now() >= Date.parse(job.expiresAt));
+  const result = claimJob(f, job);
+  assert.equal(result.failureReason, "lease_expired");
+  assert.equal(active(f).active, false);
+});
+
+test("a dead Cursor lease guard rejects native claims", async (t) => {
+  const f = fixture(t), job = prepare(f), pid = active(f).marker.pid;
+  assert.notEqual(pid, process.pid);
+  process.kill(pid, "SIGTERM");
+  await waitForProcessExit(pid);
+  const result = claimJob(f, job);
+  assert.equal(result.reason, "job_ownership_lost");
+  assert.equal(active(f).active, false);
+});
+
+test("Cursor never delegates when the lease guard cannot start", (t) => {
+  const f = fixture(t);
+  f.options.helperPath = join(f.root, "missing-helper.mjs");
+  assert.throws(() => prepare(f), /lease guard did not become ready/);
+  assert.equal(active(f).active, false);
+  const records = readdirSync(join(f.home, "repo-memory-jobs"))
+    .filter(name => name !== "in-progress")
+    .map(name => JSON.parse(readFileSync(join(f.home, "repo-memory-jobs", name, "job.json"))));
+  assert.equal(records.length, 1);
+  assert.equal(records[0].status, "failed");
+  assert.equal(records[0].failureReason, "lease_guard_start_failed");
 });
 
 test("Cursor reuses adaptive policy for current, commit-threshold and disabled bundles", (t) => {
@@ -166,7 +229,7 @@ test("expired unclaimed tickets record failure without accepting completion text
   assert.throws(() => transition(f, "finish", job, ["--claim-token", "succeeded"]), /claim-token/);
 });
 
-test("native finalization rejects repo/run mismatch and a replaced marker", (t) => {
+test("native finalization rejects repo/run mismatch and a replaced marker", async (t) => {
   const f = fixture(t), job = prepare(f), claim = claimJob(f, job);
   const otherRepo = join(f.root, "other"); mkdirSync(otherRepo);
   assert.throws(() => runCursorRepoMemoryJob(["finish", "--repo", otherRepo, "--job", job.jobId, "--run", job.runId, "--claim-token", claim.claimToken], f.options), /identity/);
@@ -177,6 +240,8 @@ test("native finalization rejects repo/run mismatch and a replaced marker", (t) 
   const result = transition(f, "finish", job, ["--claim-token", claim.claimToken]);
   assert.equal(result.reason, "job_ownership_lost");
   assert.equal(JSON.parse(readFileSync(markerPath)).runId, "replacement-run");
+  await waitForProcessExit(marker.pid);
+  assert.deepEqual(JSON.parse(readFileSync(markerPath)), marker, "old lease guard must retain the replacement marker");
 });
 
 test("native abort records a bounded reason, releases ownership and rejects replay", (t) => {
@@ -248,7 +313,18 @@ test("Cursor synchronous native startup bounds a stalled Git status and releases
 
 function fixture(t) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "cursor native memory ")));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  t.after(async () => {
+    const jobs = join(root, "private state", "repo-memory-jobs");
+    const pids = existsSync(jobs) ? readdirSync(jobs).filter(name => name !== "in-progress").flatMap(name => {
+      const path = join(jobs, name, "job.json");
+      if (!existsSync(path)) return [];
+      const pid = JSON.parse(readFileSync(path)).leasePid;
+      return Number.isSafeInteger(pid) && pid > 0 ? [pid] : [];
+    }) : [];
+    rmSync(root, { recursive: true, force: true });
+    try { await Promise.all(pids.map(waitForProcessExit)); }
+    finally { rmSync(root, { recursive: true, force: true }); }
+  });
   const repo = join(root, "repo with spaces"), home = join(root, "private state");
   mkdirSync(repo); runGit(repo, ["init", "--quiet"]); runGit(repo, ["config", "user.name", "Cursor Test"]); runGit(repo, ["config", "user.email", "cursor@example.invalid"]);
   writeFileSync(join(repo, "README.md"), "# Isolated test\n"); runGit(repo, ["add", "README.md"]); runGit(repo, ["commit", "--quiet", "-m", "initial"]);
@@ -265,4 +341,14 @@ function profile(f, head) { mkdirSync(join(f.repo, ".repo_memory"), { recursive:
 function active(f) { return readActiveRepoMemoryJobMarker({ memoraxCodeHome: f.home, repoRealpath: f.repo }); }
 function commit(f, name) { writeFileSync(join(f.repo, name), name); runGit(f.repo, ["add", name]); runGit(f.repo, ["commit", "--quiet", "-m", name]); }
 function runGit(repo, args) { const r = spawnSync("git", args, { cwd: repo, encoding: "utf8" }); assert.equal(r.status, 0, r.stderr); return r.stdout; }
-function runAsync(driver, args) { return new Promise((resolveResult) => { const child = spawn(process.execPath, [driver, ...args], { env: cleanEnv, stdio: ["ignore", "pipe", "pipe"] }); let stdout="", stderr=""; child.stdout.on("data", x => stdout += x); child.stderr.on("data", x => stderr += x); child.once("close", status => resolveResult({status, stdout, stderr})); }); }
+function runAsync(driver, args) { return new Promise((resolveResult) => { const child = spawn(process.execPath, [driver, ...args], { env: cleanEnv, stdio: ["ignore", "pipe", "pipe"] }); let stdout="", stderr=""; child.stdout.on("data", x => stdout += x); child.stderr.on("data", x => stderr += x); child.once("close", status => resolveResult({status, stdout, stderr, pid: child.pid})); }); }
+
+async function waitForProcessExit(pid) {
+  const deadline = Date.now() + 6000;
+  while (Date.now() < deadline) {
+    try { process.kill(pid, 0); }
+    catch (error) { if (error.code === "ESRCH") return; throw error; }
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  assert.fail("lease guard did not stop within its cleanup budget");
+}

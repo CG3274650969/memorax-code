@@ -142,11 +142,17 @@ Repo Memory runners use the following native execution permissions:
 | OpenCode | A dedicated session allows `edit`, `bash`, `webfetch`, `doom_loop`, and `external_directory` for `*` |
 | DSH | Uses the selected managed headless Profile via `--profile`; the adapter supplies no additional permission flag |
 | Trae | No automatic background runner |
-| Cursor | Headless `agent`/`cursor-agent` worker loads the immutable installed Agent Plugin-shaped runtime and writes only through the bounded Repo Memory job |
+| Cursor | Native `Task` dispatches the managed `memorax-repo-memory` background subagent, inherits the parent model, and uses Cursor's normal tool permissions |
 
 Run these jobs only against trusted source in an appropriately trusted local
 environment. Worker timeouts and repository validation bound lifecycle and
 identity; they do not restrict filesystem or tool access to that repository.
+
+Cursor requires a delegation ticket claim before work, limits the claim by a
+lease, and validates job ownership, the repository snapshot, and the generated
+bundle before accepting completion. These checks do not create a filesystem
+sandbox, limit the subagent's tool permissions, or forcibly stop it when the
+lease expires. Cursor does not use a standalone Agent CLI for these jobs.
 
 ### MemoraX memory traffic
 

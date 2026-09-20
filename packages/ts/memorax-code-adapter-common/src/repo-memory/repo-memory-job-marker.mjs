@@ -45,9 +45,9 @@ export function readActiveRepoMemoryJobMarker(input) {
     return { active: false, reason: "invalid_json", markerPath, repoKey };
   }
 
-  // Lease owners have no long-lived client PID. Classify without deleting a
+  // Native lease guards retain v1 PID compatibility. Classify without deleting a
   // record that another process may replace; writers hold the startup lock.
-  if (marker?.version === 2) {
+  if (marker?.version === 2 || (marker?.version === 1 && marker.ownerKind === "lease")) {
     const startedAtMs = Date.parse(marker.startedAt || "");
     const expiresAtMs = Date.parse(marker.leaseExpiresAt || "");
     const nowMs = Number.isFinite(input.nowMs) ? input.nowMs : Date.now();
@@ -59,7 +59,14 @@ export function readActiveRepoMemoryJobMarker(input) {
       && expiresAtMs > startedAtMs
       && expiresAtMs - startedAtMs <= DEFAULT_REPO_MEMORY_JOB_MARKER_TTL_MS
       && startedAtMs <= nowMs;
-    if (!valid) return { active: true, reason: "invalid_lease", marker, markerPath, repoKey };
+    const legacyEnvelope = marker.version !== 1 || (Number.isSafeInteger(marker.pid) && marker.pid > 0
+      && isNonEmptyString(marker.outputLogPath) && isNonEmptyString(marker.finalMessagePath));
+    if (!valid || !legacyEnvelope) return { active: true, reason: "invalid_lease", marker, markerPath, repoKey };
+    if (marker.version === 1) {
+      try { process.kill(marker.pid, 0); } catch (error) {
+        if (error?.code !== "EPERM") return { active: false, reason: "pid_not_running", marker, markerPath, repoKey };
+      }
+    }
     return { active: nowMs < expiresAtMs, reason: nowMs < expiresAtMs ? "leased" : "ttl_expired", marker, markerPath, repoKey };
   }
 

@@ -848,7 +848,12 @@ suitable headless execution authority. Cursor reuses the common maintenance
 decision, policy, authoring instructions, and bundle validator with a native
 execution coordinator in its adapter. A versioned private job and bounded lease
 use the common repository marker and startup lock, so other runners also
-deduplicate. The child must claim a single-use ticket before authoring and finish
+deduplicate, including immutable runtimes retained by older sessions. The shared
+marker preserves the version-1 envelope and a real per-job Node lease-guard PID;
+current readers additionally validate lease expiry and guard liveness. The guard
+reports bounded startup readiness, then checks state and ownership under the same
+lock as claim/finalization. It exits on terminal state, expiry, or replacement; it
+does not execute a model or supervise the native Task. The child must claim a single-use ticket before authoring and finish
 with the returned claim capability. Finalization verifies job ownership, an
 unchanged snapshot HEAD, the canonical bundle validator, and PROFILE local_head;
 a Task launch or model summary is not completion authority. Expired or replaced
