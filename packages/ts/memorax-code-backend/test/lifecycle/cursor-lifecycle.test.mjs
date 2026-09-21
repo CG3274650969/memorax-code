@@ -35,7 +35,6 @@ test("Cursor lifecycle works alone, preserves client scope, and removes only own
     MEMORAX_CODE_MEMORAX_API_KEY: "",
     MEMORAX_CODE_MEMORAX_USER_ID: "",
     MEMORAX_CODE_MEMORAX_ENDPOINT: "http://127.0.0.1:1",
-    MEMORAX_CODE_MEMORY_RETRIEVAL_ENABLED: "false",
     MEMORAX_CODE_MEMORY_WRITEBACK_ENABLED: "false",
     MEMORAX_CODE_NPM_PACKAGE_ROOT: "",
     MEMORAX_CODE_NPM_PACKAGE_VERSION: "",

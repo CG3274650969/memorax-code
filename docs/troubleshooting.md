@@ -411,10 +411,9 @@ memorax-code start
 memorax-cli status
 ```
 
-Automatic retrieval is disabled by default and is independent from explicit
-search. Automatic writeback requires `[memory.writeback] enabled = true` and
-must not be disabled by
-`MEMORAX_CODE_MEMORAX_WRITEBACK_ENABLED=false`.
+Search runs through the Skill or explicit `memorax-cli search`; Hooks do not
+issue Search requests. Automatic writeback requires `[memory.writeback] enabled = true`
+and must not be disabled by `MEMORAX_CODE_MEMORAX_WRITEBACK_ENABLED=false`.
 
 ## Hook ran, but automatic writeback is missing
 
@@ -449,7 +448,7 @@ If no diagnostic explains the symptom, check each stage in order:
    credentials, and workspace scope. Compare the Backend and client's actual
    environment with [writeback settings](configuration.md#writeback-and-explicit-add).
    A status command in a different shell cannot inspect their inherited
-   overrides. Automatic Search being disabled does not disable writeback.
+   overrides. Automatic writeback does not require a preceding Search.
 2. Confirm that the session has a completed turn with matching native content.
    Codex and Claude diagnostics such as `turn_id_missing`, `prompt_id_missing`,
    `transcript_unavailable`, `transcript_session_mismatch`, or `turn_not_found`
@@ -722,8 +721,7 @@ requirements. A configured or observed Hook alone does not prove that this
 database capability is available.
 
 Use the Skill for CLI Search and manual Add. This integration uses
-`beforeSubmitPrompt` context for personal memory and reminders; it does not run
-automatic prompt retrieval, even when it is enabled for other clients. Follow the
+`beforeSubmitPrompt` context for personal memory and reminders. Follow the
 session-start instructions to provide the explicit Cursor client/session
 environment for CLI commands; shell tools are not assumed to inherit Hook
 environment variables.

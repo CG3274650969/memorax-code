@@ -20,7 +20,7 @@ const personalMemoryContextOptions = {
   debugEnv: "MEMORAX_CODE_CODEX_HOOK_DEBUG",
   sessionKeyPrefix: "codex",
 };
-const RETRIEVAL_BACKEND_TIMEOUT_MS = 12_000;
+const TURN_START_BACKEND_TIMEOUT_MS = 12_000;
 const DEFAULT_BACKEND_TIMEOUT_MS = 5_000;
 
 try {
@@ -38,7 +38,6 @@ try {
     await runMemorySkillReminderHook({
       additionalReminderContext: PERSONAL_MEMORY_REMINDER_CONTEXT,
       adapterDir: "codex",
-      baseAdditionalContext: turnStartResult.additionalContext,
       ...(turnStartResult.repoMemoryWorktree ? {
         buildCadenceReminderContext: (hookInput) => buildRepoProcedureMemoryContext({
           ...hookInput,
@@ -85,7 +84,6 @@ async function recordTurnStart(body) {
     const response = await postBackend("/memory/turn-start", body);
     return {
       recorded: true,
-      additionalContext: stringValue(response?.additionalContext),
       repoMemoryWorktree: stringValue(response?.repoMemoryWorktree),
       userNotice: stringValue(response?.userNotice),
     };
@@ -114,7 +112,7 @@ async function postBackend(path, body) {
   const connection = resolveBackendConnection();
   const timeoutMs = parsePositiveInt(
     process.env.MEMORAX_CODE_CODEX_MEMORY_HOOK_TIMEOUT_MS,
-    path === "/memory/turn-start" ? RETRIEVAL_BACKEND_TIMEOUT_MS : DEFAULT_BACKEND_TIMEOUT_MS,
+    path === "/memory/turn-start" ? TURN_START_BACKEND_TIMEOUT_MS : DEFAULT_BACKEND_TIMEOUT_MS,
   );
   const response = await postBackendCommand({
     connection,

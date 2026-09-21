@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { evaluateMemorySkillReminder } from "../src/hooks/memory-skill-reminder-hook.mjs";
+import { evaluateMemorySkillReminder, markSupplementalReminderForSession } from "../src/hooks/memory-skill-reminder-hook.mjs";
 import {
   isMemorySkillReminderDue,
   resolveMemorySkillReminderIntervalTurns,
@@ -113,6 +113,42 @@ test("shared reminder evaluator replaces corrupt state with the first correlated
     assert.equal(state.runtime, "shared-contract");
     assert.equal(state.sessions.session.turnCount, 1);
     assert.equal(state.sessions.session.lastTurnId, "after-corrupt-state");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("duplicate reminders preserve independent notices and pending compaction context", async () => {
+  const root = await mkdtemp(join(tmpdir(), "memorax-code-shared-reminder-notice-"));
+  const statePath = join(root, "adapters", "shared-contract", "memory-skill-reminders.json");
+  const options = {
+    memoraxCodeHome: root,
+    adapterDir: "shared-contract",
+    runtime: "shared-contract",
+    supplementalReminderAfterCompact: true,
+    additionalReminderContext: "Restore personal memory after compaction.",
+  };
+  const input = { session_id: "session", turn_id: "turn-1" };
+  try {
+    assert.ok((await evaluateMemorySkillReminder(options, input)).reminder);
+    markSupplementalReminderForSession(options, input.session_id);
+    const beforeDuplicate = await readFile(statePath, "utf8");
+
+    assert.deepEqual(await evaluateMemorySkillReminder({
+      ...options,
+      systemMessage: "Pending Add quota notice.",
+    }, input), { systemMessage: "Pending Add quota notice." });
+    assert.equal(await evaluateMemorySkillReminder(options, input), undefined);
+    assert.equal(await evaluateMemorySkillReminder({ ...options, systemMessage: " " }, input), undefined);
+    assert.equal(await readFile(statePath, "utf8"), beforeDuplicate);
+
+    const next = await evaluateMemorySkillReminder(options, { ...input, turn_id: "turn-2" });
+    assert.equal(next.systemMessage, undefined);
+    assert.ok(next.reminder.triggers.includes("post_compaction"));
+    assert.match(next.additionalContext, /Restore personal memory after compaction/);
+    const state = JSON.parse(await readFile(statePath, "utf8"));
+    assert.equal(state.sessions.session.turnCount, 2);
+    assert.equal(state.sessions.session.supplementalReminderPending, false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

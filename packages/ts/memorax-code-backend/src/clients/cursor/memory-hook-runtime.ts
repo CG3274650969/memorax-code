@@ -43,13 +43,11 @@ export function createCursorMemoryHookRuntime(
   const home = options.memoraxCodeHome ?? defaultMemoraxCodeHome(options.env);
   const memory = createHarnessMemoryRuntime({
     client: "cursor",
-    retrievalSource: "cursor_hook_retrieval",
     writebackSource: "cursor_hook_writeback",
     diagnosticPrefix: "cursor_memory",
     traceFailureEvent: "cursor_trace.write_failed",
     turnStartTraceSource: "cursor-hook",
-    deduplicateRetrieval: true,
-    automaticRetrieval: false,
+    quotaNotices: false,
   }, options);
   const { turnCoordinator } = memory;
   let closed = false;
@@ -346,8 +344,8 @@ export function createCursorMemoryHookRuntime(
             metadata: {},
           };
           record.active = turn;
-          // Cursor has no automatic retrieval. Keep its local trace/current-turn
-          // writes under this lock so an older start cannot overwrite a new one.
+          // Keep local trace/current-turn writes under this lock so an older
+          // start cannot overwrite a new one.
           const result = await memory.recordTurnStart({
             sessionId: command.sessionId, clientTurnId: command.turnId,
             cwd: command.cwd, workspaceKind: command.workspaceKind, transcriptPath: command.transcriptPath,

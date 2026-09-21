@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { createCodexMemoryHookRuntime } from "../../memorax-code-backend/dist/clients/codex/memory-hook-runtime.js";
+import { createPendingQuotaNoticeRuntime } from "../../memorax-code-backend/dist/memory/quota-notice.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const runtimeHookPath = join(packageRoot, "hooks", "runtime-hook.mjs");
@@ -23,9 +25,9 @@ test("manifest reuses capture-cwd for compact and keeps one serialized UserPromp
     "node \"$PLUGIN_ROOT/hooks/runtime-hook.mjs\" memory-skill-reminder",
   ]);
   assert.equal(manifest.hooks.UserPromptSubmit[0].hooks[1].timeout, 20);
-  assert.match(runtime, /RETRIEVAL_BACKEND_TIMEOUT_MS = 12_000/);
+  assert.match(runtime, /TURN_START_BACKEND_TIMEOUT_MS = 12_000/);
   assert.match(runtime, /DEFAULT_BACKEND_TIMEOUT_MS = 5_000/);
-  assert.match(runtime, /path === "\/memory\/turn-start" \? RETRIEVAL_BACKEND_TIMEOUT_MS : DEFAULT_BACKEND_TIMEOUT_MS/);
+  assert.match(runtime, /path === "\/memory\/turn-start" \? TURN_START_BACKEND_TIMEOUT_MS : DEFAULT_BACKEND_TIMEOUT_MS/);
   assert.equal(manifest.hooks.SessionStart.length, 1);
   assert.deepEqual(sessionCommands, [
     "node \"$PLUGIN_ROOT/hooks/runtime-hook.mjs\" ensure-backend",
@@ -367,7 +369,7 @@ test("combined memory hook starts Repo Memory build for the Backend-authorized w
   }
 });
 
-test("automatic retrieval, reminders, and user notices share one Codex Hook payload", async () => {
+test("Codex Hook retains reminders and Add notices while ignoring legacy retrieval context", async () => {
   const root = await mkdtemp(join(tmpdir(), "memorax-code-codex-retrieval-reminder-"));
   const memoraxCodeHome = join(root, "memorax-code");
   const requests = [];
@@ -424,7 +426,7 @@ test("automatic retrieval, reminders, and user notices share one Codex Hook payl
       systemMessage: "Quota notice for turn-1.",
       hookSpecificOutput: {
         hookEventName: "UserPromptSubmit",
-        additionalContext: `Retrieved context for turn-1.\n\n${MEMORY_REMINDER_CONTEXT}`,
+        additionalContext: MEMORY_REMINDER_CONTEXT,
       },
     });
     assert.equal(second.code, 0, second.stderr);
@@ -439,6 +441,103 @@ test("automatic retrieval, reminders, and user notices share one Codex Hook payl
     assert.equal(requests[1].body.content, MEMORY_REMINDER_CONTEXT);
   } finally {
     await new Promise((resolve) => server.close(resolve));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Codex duplicate prompts deliver late Add notices without repeating reminders or advancing cadence", async () => {
+  const root = await mkdtemp(join(tmpdir(), "memorax-code-codex-late-add-notice-"));
+  const memoraxCodeHome = join(root, "memorax-code");
+  const transcriptPath = join(root, "rollout.jsonl");
+  const notice = "Only 10 Add requests remain.";
+  const requests = [];
+  let noticeClaims = 0;
+  let remoteCalls = 0;
+  const pendingQuotaNotice = createPendingQuotaNoticeRuntime({
+    claimQuotaNotice: async () => {
+      noticeClaims += 1;
+      return notice;
+    },
+  });
+  const runtime = createCodexMemoryHookRuntime({
+    memoraxCodeHome,
+    env: {
+      MEMORAX_CODE_HOME: memoraxCodeHome,
+      MEMORAX_CODE_MEMORAX_ENDPOINT: "http://memorax.test",
+      MEMORAX_CODE_MEMORAX_API_KEY: "test-key",
+      MEMORAX_CODE_MEMORAX_USER_ID: "test-user",
+      MEMORAX_CODE_CODEX_TRACE_ENABLED: "false",
+    },
+    pendingQuotaNotice,
+    fetchImpl: async () => {
+      remoteCalls += 1;
+      throw new Error("Turn start must not send a remote request");
+    },
+  });
+  const server = createServer(async (req, res) => {
+    let body = "";
+    for await (const chunk of req) body += String(chunk);
+    const requestBody = JSON.parse(body);
+    requests.push({ path: req.url, body: requestBody });
+    const response = req.url === "/memory/turn-start"
+      ? await runtime.recordTurnStart(requestBody)
+      : { ok: true };
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(response));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  try {
+    await mkdir(memoraxCodeHome, { recursive: true });
+    await writeFile(join(memoraxCodeHome, "config.toml"), "[memory.skill_reminder]\ninterval_turns = 2\n");
+    await writeFile(transcriptPath, JSON.stringify({
+      type: "session_meta",
+      payload: { id: "late-add-session", cwd: root },
+    }) + "\n");
+    const env = {
+      MEMORAX_CODE_HOME: memoraxCodeHome,
+      MEMORAX_CODE_BACKEND_URL: `http://127.0.0.1:${address.port}`,
+      MEMORAX_CODE_CODEX_MEMORY_HOOK_TIMEOUT_MS: "1000",
+    };
+    const input = {
+      hook_event_name: "UserPromptSubmit",
+      session_id: "late-add-session",
+      turn_id: "turn-1",
+      transcript_path: transcriptPath,
+      cwd: root,
+      prompt: "First prompt.",
+    };
+    const first = await runHook(input, env);
+    assert.equal(first.code, 0, first.stderr);
+    assertMemoryReminder(first.stdout);
+
+    // Automatic Add can finish after this Turn's first prompt Hook has returned.
+    pendingQuotaNotice.queue({ baseUrl: "http://memorax.test", apiKey: "test-key" }, {
+      featureCode: "memory_write", remaining: 10, limit: 100,
+    });
+    const duplicate = await runHook(input, env);
+    assert.equal(duplicate.code, 0, duplicate.stderr);
+    assert.notEqual(duplicate.stdout, "", "the duplicate Hook must deliver the claimed Add notice");
+    assert.deepEqual(JSON.parse(duplicate.stdout), { systemMessage: notice });
+    const repeated = await runHook(input, env);
+    assert.equal(repeated.code, 0, repeated.stderr);
+    assert.equal(repeated.stdout, "");
+
+    const second = await runHook({ ...input, turn_id: "turn-2", prompt: "Second prompt." }, env);
+    assert.equal(second.code, 0, second.stderr);
+    assert.equal(second.stdout, "");
+    const third = await runHook({ ...input, turn_id: "turn-3", prompt: "Third prompt." }, env);
+    assert.equal(third.code, 0, third.stderr);
+    assertMemoryReminder(third.stdout);
+    assert.equal(noticeClaims, 1);
+    assert.equal(remoteCalls, 0);
+    const state = JSON.parse(await readFile(join(memoraxCodeHome, "adapters", "codex", "memory-skill-reminders.json"), "utf8"));
+    assert.equal(state.sessions["late-add-session"].turnCount, 3);
+    assert.deepEqual(requests.filter(({ path }) => path === "/memory/skill-reminder").map(({ body }) => body.turnId), ["turn-1", "turn-3"]);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    runtime.close();
+    pendingQuotaNotice.close();
     await rm(root, { recursive: true, force: true });
   }
 });

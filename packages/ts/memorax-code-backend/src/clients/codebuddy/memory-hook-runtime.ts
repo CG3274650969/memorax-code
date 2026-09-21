@@ -36,12 +36,10 @@ export function createCodeBuddyMemoryHookRuntime(options: Options = {}): CodeBud
   const now = options.now ?? (() => Date.now());
   const memory = createHarnessMemoryRuntime({
     client,
-    retrievalSource: `${client}_hook_retrieval`,
     writebackSource: `${client}_hook_writeback`,
     diagnosticPrefix: `${client}_memory_hook`,
     traceFailureEvent: `${client}_trace.write_failed`,
     turnStartTraceSource: `${client}-hook`,
-    deduplicateRetrieval: false,
   }, options);
   const coordinator = memory.turnCoordinator;
   return {
@@ -60,7 +58,6 @@ export function createCodeBuddyMemoryHookRuntime(options: Options = {}): CodeBud
         createdAt: now(),
         traceContext,
         prompt: command.prompt,
-        retrievalTraceContext: traceContextFromCodeBuddyHookBody(command),
       });
     },
     async writeback(command) {

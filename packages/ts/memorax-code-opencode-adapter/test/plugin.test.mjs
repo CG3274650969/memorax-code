@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { createMemoraxOpenCodePlugin } from "../src/plugin.mjs";
 import { OPENCODE_REPO_MEMORY_AGENT } from "../src/repo-memory-server-runner.mjs";
 
-test("chat.message retrieves memory and injects it into the system prompt", async () => {
+test("chat.message records the prompt without injecting legacy automatic Search context", async () => {
   const requests = [];
   const plugin = createPluginWithoutReminders({
     backendConnection: { url: "http://127.0.0.1:8787", token: "test-token" },
@@ -25,7 +25,7 @@ test("chat.message retrieves memory and injects it into the system prompt", asyn
 
   await hooks["chat.message"]({ sessionID: "session-1" }, output);
 
-  assert.equal(output.message.system, "Existing system context\n\nRemember the repository boundary.");
+  assert.equal(output.message.system, "Existing system context");
   assert.equal(requests.length, 1);
   assert.equal(requests[0].url, "http://127.0.0.1:8787/memory/turn-start");
   assert.equal(requests[0].options.headers["x-memorax-code-backend-token"], "test-token");
@@ -99,7 +99,7 @@ test("chat.message shows userNotice without blocking or injecting it into model 
     fetchImpl: responseSequence([], [{
       ok: true,
       additionalContext: "Retrieved memory context.",
-      userNotice: "Quota reminder: Memory search has 10% or less remaining.",
+      userNotice: "Quota reminder: Memory write has 10% or less remaining.",
     }]),
   });
   const hooks = await plugin(pluginInput({
@@ -117,12 +117,12 @@ test("chat.message shows userNotice without blocking or injecting it into model 
 
   await hooks["chat.message"]({ sessionID: "session-quota" }, output);
 
-  assert.equal(output.message.system, "Existing system context\n\nRetrieved memory context.");
+  assert.equal(output.message.system, "Existing system context");
   assert.doesNotMatch(output.message.system, /Quota reminder/);
   assert.deepEqual(toastCalls, [{
     body: {
       title: "MemoraX Code",
-      message: "Quota reminder: Memory search has 10% or less remaining.",
+      message: "Quota reminder: Memory write has 10% or less remaining.",
       variant: "warning",
       duration: 10_000,
     },
@@ -482,7 +482,7 @@ test("OpenCode forwards first-prompt and post-compaction reminders once", async 
     await hooks.dispose();
     assert.match(first.message.system, /MemoraX Code reminder: proactively invoke/);
     assert.match(second.message.system, /MemoraX Code personal-memory reminder/);
-    assert.equal(third.message.system, "Retrieved user-reminder-3.");
+    assert.equal(third.message.system, undefined);
     const reminderRequests = requests.filter((request) => request.path === "/memory/skill-reminder");
     assert.deepEqual(reminderRequests.map((request) => request.body.triggers), [
       ["cadence"],

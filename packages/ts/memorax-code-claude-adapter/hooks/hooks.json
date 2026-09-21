@@ -34,7 +34,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/runtime-hook.mjs\" memory-turn",
-            "statusMessage": "Retrieving MemoraX Code memory",
+            "statusMessage": "Recording MemoraX Code turn",
             "timeout": 15
           },
           {

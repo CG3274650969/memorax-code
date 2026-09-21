@@ -82,7 +82,7 @@ When eligible, begin the final answer with one brief opening paragraph before th
 
 Keep it conversational. Do not add a heading, card, label, or colon-led report. Do not open with stock wording such as `MemoraX Code 的 Memory 提示：`, `本轮借助...`, `Memory impact:`, or `The memory said...`. Use only normal visible prose: do not include HTML or XML comments, Markdown markers, tags, zero-width text, hidden control text, or metadata. A natural shape is: `这次我参考了 MemoraX Code 的 Memory，避开了之前验证过无效的修复路径。`
 
-Do not report active Add, automatic writeback, Repo Memory build or update, or automatic coding-memory retrieval as memory that helped the current turn. Omit the opening paragraph when no eligible memory materially helped.
+Do not report active Add, automatic writeback, or Repo Memory build or update as memory that helped the current turn. Omit the opening paragraph when no eligible memory materially helped.
 
 ## Shared Rules
 

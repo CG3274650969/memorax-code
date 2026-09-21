@@ -68,12 +68,10 @@ export function createDshMemoryHookRuntime(
   const now = options.now ?? (() => Date.now());
   const harness = createHarnessMemoryRuntime({
     client: DSH_MEMORY_TURN_CLIENT,
-    retrievalSource: "dsh_native_retrieval",
     writebackSource: "dsh_native_writeback",
     diagnosticPrefix: "dsh_memory",
     traceFailureEvent: "dsh_trace.write_failed",
     turnStartTraceSource: "dsh-cordis",
-    deduplicateRetrieval: true,
     quotaNotices: false,
   }, options);
   const { turnCoordinator } = harness;
@@ -95,7 +93,6 @@ export function createDshMemoryHookRuntime(
         prompt: command.prompt,
         traceContext,
         traceRequest: { start_seq: command.startSeq },
-        retrievalKeySuffix: String(command.startSeq),
         diagnosticFields: {
           sessionId: command.sessionId,
           turn: command.turn,

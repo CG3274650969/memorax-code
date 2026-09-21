@@ -1139,8 +1139,7 @@ test("setup seeds the default MemoraX Code config around trial memory preference
     assert.match(tomlSectionText(config, "clients"), /^dsh = true(?:\s+#.*)?$/m);
     assert.doesNotMatch(config, /profile\s*=/);
     assert.doesNotMatch(config, /\[memory\]\s|provider\s*=/);
-    assert.match(config, /\[memory\.retrieval\]/);
-    assert.match(config, /enabled = false # Auto-inject retrieved memories into supported client prompts\./);
+    assert.doesNotMatch(config, /\[memory\.retrieval\]|Auto-inject retrieved memories|Automatic Hook retrieval/);
     assert.match(config, /\[memory\.writeback\]/);
     assert.match(config, /enabled = true # Allow supported client sessions to write memories after replies\./);
     assert.match(config, /\[memory\.add\]\r?\noutput_language = "zh" # Language for newly generated MemoraX memories\./);
@@ -1169,7 +1168,6 @@ test("setup seeds the default MemoraX Code config around trial memory preference
       "memorax",
       "memory.add",
       "memory.repo_update",
-      "memory.retrieval",
       "memory.skill_reminder",
       "memory.writeback",
       "trace.claude",
@@ -1240,9 +1238,9 @@ test("setup detects memory preferences before writing MemoraX config", async () 
     );
     assert.match(
       config,
-      /user_id = "memorax-user" # Stable username; requests derive a workspace-scoped namespace\.\r?\napi_key = "sk_[A-Za-z0-9_-]+" # MemoraX API key used by the local Backend\.\r?\n\r?\n# Automatic Hook retrieval is opt-in\.\r?\n\[memory\.retrieval\]/,
+      /user_id = "memorax-user" # Stable username; requests derive a workspace-scoped namespace\.\r?\napi_key = "sk_[A-Za-z0-9_-]+" # MemoraX API key used by the local Backend\.\r?\n\r?\n# Automatic writeback sends selected prompts and final answers to MemoraX\.\r?\n\[memory\.writeback\]/,
     );
-    assert.match(config, /\[memory\.retrieval\]\nenabled = false # Auto-inject retrieved memories into supported client prompts\./);
+    assert.doesNotMatch(config, /\[memory\.retrieval\]|Auto-inject retrieved memories|Automatic Hook retrieval/);
     assert.match(config, /\[memory\.skill_reminder\]/);
     assert.match(config, /interval_turns = 5 # Show the MemoraX Code skill reminder every N native client turns, starting on the first turn\./);
     assert.equal(activeTomlSectionCount(config, "memory.writeback"), 1);
@@ -1327,7 +1325,7 @@ test("setup accepts API key stdin without a TTY and preserves independent client
     detectedUserId: "workbuddy-user",
     detectedLanguage: null,
     trialProvisionFailure: true,
-    memoraxCodeConfig: "[clients]\ncodex = false\nclaude = false\ncodebuddy = false\n\n[memory.writeback]\nenabled = false\n",
+    memoraxCodeConfig: "[clients]\ncodex = false\nclaude = false\ncodebuddy = false\n\n[memory.writeback]\nenabled = false\n\n[memory.retrieval]\nenabled = true\ntop_k = 3\n\n[memorax]\nstartup_timeout_ms = 2500\n",
   });
   try {
     assert.equal(run.result.code, 0, run.result.stderr);
@@ -1344,6 +1342,9 @@ test("setup accepts API key stdin without a TTY and preserves independent client
     assert.match(tomlSectionText(config, "clients"), /^codebuddy = false$/m);
     assert.match(tomlSectionText(config, "clients"), /^workbuddy = true$/m);
     assert.match(tomlSectionText(config, "memory.writeback"), /^enabled = false$/m);
+    assert.match(tomlSectionText(config, "memory.retrieval"), /^enabled = true$/m);
+    assert.match(tomlSectionText(config, "memory.retrieval"), /^top_k = 3$/m);
+    assert.match(tomlSectionText(config, "memorax"), /^startup_timeout_ms = 2500$/m);
     await assertSetupComplete(run);
   } finally {
     await rm(run.root, { recursive: true, force: true });

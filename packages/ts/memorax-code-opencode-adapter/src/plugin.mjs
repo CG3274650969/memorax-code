@@ -204,7 +204,6 @@ export function createMemoraxOpenCodePlugin(options = {}) {
           return;
         }
         if (!pluginEnabled(options)) return;
-        let retrievalContext;
         let repositoryWorktree;
         let turnStartAccepted = false;
         try {
@@ -237,7 +236,6 @@ export function createMemoraxOpenCodePlugin(options = {}) {
             if (typeof oldest !== "string") break;
             pendingTurns.delete(oldest);
           }
-          retrievalContext = stringValue(result?.additionalContext);
         } catch (error) {
           debug(options, "opencode turn start failed", error);
         }
@@ -257,7 +255,7 @@ export function createMemoraxOpenCodePlugin(options = {}) {
             "opencode reminder trace failed",
           );
         }
-        appendSystemContexts(output, retrievalContext, reminderResult?.additionalContext);
+        appendSystemContexts(output, reminderResult?.additionalContext);
       },
       "shell.env": async (input, output) => {
         if (!pluginEnabled(options)) return;

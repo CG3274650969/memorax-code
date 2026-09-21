@@ -230,7 +230,7 @@ try {
 
   assert.deepEqual(
     memoryStub.requests.filter((request) => request.path === "/v1/memories/search").map((request) => request.body.query),
-    [PROMPT, SECOND_PROMPT],
+    [],
   );
   const adds = memoryStub.requests.filter((request) => request.path === "/v1/memories/add");
   assert.deepEqual(adds.map((request) => (
@@ -249,7 +249,7 @@ try {
     JSON.stringify(request.body).includes(PROMPT)
   ));
   assert.ok(promptModelRequest, "OpenCode did not send the user prompt to the model");
-  assert.match(JSON.stringify(promptModelRequest.body), /E2E recalled memory/);
+  assert.doesNotMatch(JSON.stringify(promptModelRequest.body), /E2E recalled memory/);
   const secondPromptModelRequest = modelStub.requests.find((request) => (
     JSON.stringify(request.body).includes(SECOND_PROMPT)
   ));
@@ -302,7 +302,8 @@ try {
 
   const traceEvents = (await readFile(tracePath, "utf8")).trim().split(/\r?\n/).map(JSON.parse);
   const traceTypes = new Set(traceEvents.map((event) => event.type));
-  for (const type of ["turn_start", "turn_end", "memory_retrieve", "memory_writeback"]) {
+  assert.equal(traceTypes.has("memory_retrieve"), false);
+  for (const type of ["turn_start", "turn_end", "memory_writeback"]) {
     assert.equal(traceTypes.has(type), true);
   }
 

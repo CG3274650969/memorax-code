@@ -53,12 +53,10 @@ export function createTraeMemoryHookRuntime(
   const now = options.now ?? (() => Date.now());
   const memory = createHarnessMemoryRuntime({
     client: TRAE_MEMORY_TURN_CLIENT,
-    retrievalSource: "trae_hook_retrieval",
     writebackSource: "trae_hook_writeback",
     diagnosticPrefix: "trae_memory",
     traceFailureEvent: "trae_trace.write_failed",
     turnStartTraceSource: "trae-hook",
-    deduplicateRetrieval: true,
   }, options);
   const { turnCoordinator } = memory;
   const interruptedTurns = new Set<string>();
@@ -95,7 +93,7 @@ export function createTraeMemoryHookRuntime(
         createdAt,
         traceContext,
         prompt: command.prompt,
-        // Publish before trace or retrieval can yield to a concurrent Stop.
+        // Publish before tracing can yield to a concurrent Stop.
         onTurnRegistered(turn) {
           activeTurns.delete(command.sessionId);
           activeTurns.set(command.sessionId, turn);

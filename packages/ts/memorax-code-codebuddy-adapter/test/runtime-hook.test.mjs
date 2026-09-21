@@ -69,7 +69,7 @@ test("UserPromptSubmit posts turn-start, injects the skill reminder, and traces 
     assert.equal(result.status, 0);
     const output = JSON.parse(result.stdout);
     assert.equal(output.hookSpecificOutput.hookEventName, "UserPromptSubmit");
-    assert.match(output.hookSpecificOutput.additionalContext, /^memory context\n\nMemoraX Code reminder:/);
+    assert.match(output.hookSpecificOutput.additionalContext, /^MemoraX Code reminder:/);
     assert.match(output.hookSpecificOutput.additionalContext, /the `memorax-code` skill/);
     assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /memorax-code-codebuddy-adapter:memorax-code/);
     const turnStarts = requests.filter((request) => request.path === "/memory/turn-start");
@@ -363,9 +363,7 @@ test("UserPromptSubmit retries reuse one deterministic pending turn and a new pr
 
     const retry = await runHook(input, { root, server });
     assert.equal(retry.status, 0);
-    assert.deepEqual(JSON.parse(retry.stdout), {
-      hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "memory context" },
-    });
+    assert.equal(retry.stdout, "");
     const retryPending = JSON.parse(await readFile(join(root, "adapters", "codebuddy", "pending.json"), "utf8"));
     assert.equal(retryPending["session-retry"].turnId, firstPending["session-retry"].turnId);
     assert.equal(retryPending["session-retry"].createdAt, firstPending["session-retry"].createdAt);

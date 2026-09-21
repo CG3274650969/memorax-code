@@ -7,7 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { enableTraeAdapter } from "../src/config.mjs";
 
-test("Trae UserPromptSubmit records one Turn and injects memory context", async () => {
+test("Trae UserPromptSubmit records one Turn and injects local memory reminders", async () => {
   const fixture = await createFixture("prompt", { withProcedureMemory: true });
   try {
     const result = await runHook(fixture, {
@@ -20,7 +20,7 @@ test("Trae UserPromptSubmit records one Turn and injects memory context", async 
     assert.equal(result.status, 0, result.stderr);
     const output = JSON.parse(result.stdout);
     assert.equal(output.hookSpecificOutput.hookEventName, "UserPromptSubmit");
-    assert.match(output.hookSpecificOutput.additionalContext, /^memory context\n\nMemoraX Code reminder:/);
+    assert.match(output.hookSpecificOutput.additionalContext, /^MemoraX Code reminder:/);
     assert.match(output.hookSpecificOutput.additionalContext, /Natural final-answer mention for supported coding agents:/);
     assert.match(output.hookSpecificOutput.additionalContext, /Run the focused Trae adapter test first/);
 
@@ -269,22 +269,21 @@ test("Trae restores authorized Profile after compact and keeps Procedure Memory 
         hook_event_name: "UserPromptSubmit", session_id: sessionId, prompt: `prompt ${index + 1}`, cwd: fixture.root,
       });
       assert.equal(result.status, 0, result.stderr);
-      const output = JSON.parse(result.stdout);
-      assert.equal(output.hookSpecificOutput.hookEventName, "UserPromptSubmit");
-      const context = output.hookSpecificOutput.additionalContext;
+      const output = result.stdout ? JSON.parse(result.stdout) : undefined;
+      const context = output?.hookSpecificOutput?.additionalContext ?? "";
       assert.equal(context.includes("Prefer concise Trae answers"), scenario.profile);
       assert.equal(context.includes("Run the focused Trae adapter test first"), scenario.procedure);
       assert.equal(context.includes("MemoraX Code reminder:"), scenario.procedure);
       assert.equal(context.includes("MemoraX Code personal-memory reminder:"), scenario.profile);
       if (scenario.triggers.length) {
-        assert.match(context, /^memory context\n\n/);
+        assert.equal(output.hookSpecificOutput.hookEventName, "UserPromptSubmit");
         const turnStart = fixture.requests.filter(({ path }) => path === "/memory/turn-start").at(-1);
         expectedReminders.push({
           version: 1, client: "trae", sessionId, turnId: turnStart.body.turnId, cwd: fixture.root,
-          content: context.slice("memory context\n\n".length), triggers: scenario.triggers,
+          content: context, triggers: scenario.triggers,
         });
       } else {
-        assert.equal(context, "memory context");
+        assert.equal(result.stdout, "");
       }
       assert.deepEqual(
         fixture.requests.filter(({ path }) => path === "/memory/skill-reminder").map(({ body }) => body),

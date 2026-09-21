@@ -113,7 +113,7 @@ flowchart LR
   CursorAdapter -. "versioned local Hook HTTP" .-> Service
 
   Clients -->|"shared Skill via client shell"| MemoryCLI
-  Service -->|"automatic Search/Add"| MemoraX
+  Service -->|"automatic Add"| MemoraX
   MemoryCLI -->|"explicit Search/Add"| MemoraX
   Service --> Local
   MemoryCLI --> Local
@@ -472,15 +472,14 @@ not replace configured repository-scoped memory identity.
 
 ### 3.2 Hook and retrieval data flow
 
-Automatic Search on turn-start Hooks is disabled by default. The usual Search
-path is a client deciding through the shared Skill to call `memorax-cli`, as
-shown in [Manual memory CLI flow](#33-manual-memory-cli-flow). Hooks still
-provide native identity, scope, local context, and automatic-writeback
-coordination when automatic retrieval is off. Cursor keeps automatic retrieval
-disabled and uses the Skill and CLI Search path. Its `beforeSubmitPrompt`
-integration uses native `additional_context` for local reminders after a
-successful Backend turn-start response confirms current-Turn registration;
-personal-memory contents additionally require a Backend-authorized Git worktree.
+Search runs when a client decides through the shared Skill to call
+`memorax-cli`, or when a user invokes the CLI directly, as shown in
+[Manual memory CLI flow](#33-manual-memory-cli-flow). Turn-start Hooks do not
+call MemoraX Search. They provide native identity, scope, local context, pending
+writeback quota notices, and automatic-writeback coordination. Cursor uses native
+`additional_context` for local reminders after a successful Backend turn-start
+response confirms current-Turn registration; personal-memory contents additionally
+require a Backend-authorized Git worktree.
 
 ```mermaid
 sequenceDiagram
@@ -489,7 +488,6 @@ sequenceDiagram
   participant Backend as Backend HTTP / MemoryService
   participant Native as client-specific runtime
   participant Shared as HarnessMemoryRuntime
-  participant Provider as local MemoraX provider
   participant Trace as local trace / observability
 
   Client->>Hook: native event and correlation
@@ -503,12 +501,8 @@ sequenceDiagram
     Shared->>Shared: resolve scope unless pre-resolved
     Shared->>Shared: register metadata only for a correlated Turn
     Shared->>Trace: record turn-start and current-turn state
-    opt automatic retrieval enabled and eligible
-      Shared->>Provider: retrieve scoped memory via automatic-retrieval
-      Provider->>Trace: emit result through observability hook
-      Provider-->>Shared: normalized result
-    end
-    Shared-->>Native: normalized context, worktree, optional notices
+    Shared->>Shared: claim pending writeback quota notice when supported
+    Shared-->>Native: authorized worktree and optional notices
     Native-->>Backend: turn-start result
     Backend-->>Hook: JSON response
   end
@@ -526,7 +520,7 @@ outcome. Ordinary skips and interrupted Turns remain outside failure reporting.
 Important distinctions:
 
 - Hook or plugin event fields normally supply protocol, correlation, and
-  retrieval input rather than automatic-writeback content. OpenCode's
+  local trace input rather than automatic-writeback content. OpenCode's
   separately supplied SDK records are validated as client-native content. Trae
   is the narrow exception because it exposes no stable raw Session: its
   validated, correlated `UserPromptSubmit` prompt and `Stop` final assistant
@@ -571,8 +565,8 @@ Important distinctions:
   coordination does not parse, mix, or guess those formats.
 - All supported clients delegate their common memory lifecycle
   to `memory/harness-runtime.ts`. Turn start resolves repository scope, records
-  Turn metadata and current-turn trace state, performs optional retrieval,
-  claims supported quota notices, and returns normalized context. Completion passes
+  Turn metadata and current-turn trace state, claims supported pending writeback
+  quota notices, and returns authorized worktree information. Completion passes
   validated native user/assistant content, exact identity, and a scope resolver
   to the Turn coordinator. Their client runtimes retain native parsing,
   correlation guards, retries, interruption recovery, and client-specific
@@ -581,25 +575,24 @@ Important distinctions:
   resolution. It can provide a pre-resolved scope result, including a failure,
   without the shared runtime resolving it again. A start observation without a
   Turn ID can resolve scope and record trace, but cannot register a writable
-  Turn, claim quota notices, or retrieve memory. OpenCode retains SDK message
+  Turn or claim quota notices. OpenCode retains SDK message
   lineage and compaction-continuation validation, interrupted-Turn handling,
   and the requirement for a prior session scope binding at completion. Its
   start trace keeps the `opencode-plugin` source; Turn-start diagnostics use
   the common metadata-registration stage before trace writes. Trae publishes
   its active Turn snapshot through the synchronous `onTurnRegistered` callback,
-  immediately after coordinator registration and before trace or retrieval
+  immediately after coordinator registration and before trace processing
   can yield to a concurrent Stop. Its per-session start queue, interruption
   records, and active-state cleanup remain client-owned. DSH supplies a
   start-trace request containing only `start_seq`, keeps the `dsh-cordis` source,
-  and adds the native start sequence to retrieval deduplication without changing
-  Turn identity. It disables both pending and retrieval quota-notice claims.
+  and disables pending quota-notice claims.
   Persisted event-interval validation, interruption handling, and restart scope
   recovery remain DSH-owned.
 - OpenCode's awaited `chat.message` plugin event supplies the correlated user
-  prompt and injects accepted retrieval plus shared Skill reminder, User
-  Profile, and Procedure Memory context into that message's system context.
-  Claimed Search and Add quota notices are dispatched through best-effort TUI
-  toasts without entering model context or blocking the prompt path. Its stable
+  prompt and injects shared Skill reminder, User Profile, and Procedure Memory
+  context into that message's system context. Pending Add quota notices are
+  dispatched through best-effort TUI toasts without entering model context or
+  blocking the prompt path. Its stable
   `session.compacted` event marks a durable supplemental reminder for the next
   real user message; synthetic and compaction messages do not consume that
   pending state. Local reminder evaluation remains independent of Backend
@@ -617,8 +610,8 @@ Important distinctions:
 The shared `memorax-code` Skill routes coding tasks to the relevant memory
 instructions. When the task calls for persistent recall, the client runs
 `memorax-cli search` through its shell tool and uses the returned scoped memory.
-Users can also invoke the same CLI directly. This explicit Search path is
-independent of the automatic-retrieval setting.
+Users can also invoke the same CLI directly. Search uses the configured retrieval
+parameters and requires credentials and an authorized workspace scope.
 
 ```mermaid
 flowchart LR
@@ -729,7 +722,7 @@ that recover do not produce terminal failure records.
 - A valid persisted DSH interval can restore automatic writeback after a
   Backend restart without cached Turn metadata; repository scope is still
   resolved and validated from the persisted Session workspace.
-- DSH uses the shared retrieval, buffering, chunking, redaction, provider, and
+- DSH uses the shared buffering, chunking, redaction, provider, and
   client-qualified trace paths. Its normalized Search and Add operations enter
   DSH trace without copying the native Session Event Log.
 - OpenCode terminal handling accepts only matching SDK user and completed
@@ -1159,7 +1152,7 @@ rather than reaching into those resources and closing them ad hoc.
 
 ```mermaid
 flowchart LR
-  Events["Backend service<br/>retrieval and writeback events"]
+  Events["Backend service<br/>automatic writeback events"]
   Fanout["app/memory-observability"]
   LocalWriters["turn, reminder, and CLI trace writers"]
   Trace["client-qualified local trace"]
@@ -1169,7 +1162,7 @@ flowchart LR
   LocalWriters --> Trace
 ```
 
-Retrieval, writeback, and provider kernels emit operational events through
+Writeback and provider kernels emit operational events through
 injected observability and diagnostic ports. The Backend composition root
 selects their local sinks. Turn registration in the shared harness runtime,
 reminder recording, and the manual CLI also use the trace Store directly for

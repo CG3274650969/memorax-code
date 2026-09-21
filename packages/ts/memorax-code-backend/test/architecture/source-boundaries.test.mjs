@@ -65,7 +65,6 @@ const rules = [
   {
     name: "request-time memory production does not depend on adapter lifecycle",
     importers: [
-      "memory/automatic-retrieval.ts",
       "memory/automatic-writeback.ts",
       "memory/harness-runtime.ts",
       ...clientMemoryRuntimes,
@@ -101,7 +100,6 @@ const rules = [
   {
     name: "memory service kernel receives Backend diagnostics through a port",
     importers: [
-      "memory/automatic-retrieval.ts",
       "memory/automatic-writeback.ts",
       "memory/harness-runtime.ts",
       ...clientMemoryRuntimes,
