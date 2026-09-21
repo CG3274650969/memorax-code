@@ -4,18 +4,20 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { enableCodeBuddyAdapter, codeBuddyInstallPath } from "../src/config.mjs";
+import { enableCodeBuddyAdapter, codeBuddyInstallPath, readManagedCodeBuddyTarget } from "../src/config.mjs";
 
 test("CodeBuddy repo memory launcher pins its plugin and uses non-persistent print mode", async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "memorax-codebuddy-repo-memory-dry-run-")));
   const repo = join(root, "repo");
   initRepo(repo);
   const home = join(root, "workbuddy");
+  const memoraxCodeHome = join(root, "memorax-code");
   const command = join(root, "codebuddy");
   writeFileSync(command, "#!/bin/sh\n", { mode: 0o755 });
-  await enableCodeBuddyAdapter({ codeBuddyHome: home, codeBuddyCommand: command });
+  await enableCodeBuddyAdapter({ codeBuddyHome: home, codeBuddyCommand: command, memoraxCodeHome });
+  assert.equal((await readManagedCodeBuddyTarget({ memoraxCodeHome })).codeBuddyHome, home);
   const result = runInstalledJob(home, ["start", "--mode", "build", "--repo", repo, "--dry-run"], {
-    MEMORAX_CODE_HOME: join(root, "memorax-code"),
+    MEMORAX_CODE_HOME: memoraxCodeHome,
     CODEBUDDY_PLUGIN_ROOT: "/c/Users/incorrect/plugin/root",
   });
   assert.equal(result.status, 0, result.stderr);
@@ -53,7 +55,9 @@ test("CodeBuddy repo memory worker materializes and validates a repository bundl
     codeBuddyHome: home,
     codeBuddyCommand: command,
     memoraxCodeCommand,
+    memoraxCodeHome,
   });
+  assert.equal((await readManagedCodeBuddyTarget({ memoraxCodeHome })).codeBuddyHome, home);
   const result = runInstalledJob(home, ["start", "--mode", "build", "--repo", repo], {
     MEMORAX_CODE_HOME: memoraxCodeHome,
     MEMORAX_CODE_CODEBUDDY_COMMAND: command,
@@ -75,7 +79,8 @@ test("CodeBuddy repo memory worker bounds a non-returning headless client", asyn
   const home = join(root, "workbuddy");
   const memoraxCodeHome = join(root, "memorax-code");
   const command = writeHangingCodeBuddy(join(root, "codebuddy"));
-  await enableCodeBuddyAdapter({ codeBuddyHome: home, codeBuddyCommand: command });
+  await enableCodeBuddyAdapter({ codeBuddyHome: home, codeBuddyCommand: command, memoraxCodeHome });
+  assert.equal((await readManagedCodeBuddyTarget({ memoraxCodeHome })).codeBuddyHome, home);
   const result = runInstalledJob(home, ["start", "--mode", "build", "--repo", repo], {
     MEMORAX_CODE_HOME: memoraxCodeHome,
     MEMORAX_CODE_CODEBUDDY_COMMAND: command,
