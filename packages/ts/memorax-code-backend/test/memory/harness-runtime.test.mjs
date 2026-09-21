@@ -173,3 +173,31 @@ function definition(client) {
     deduplicateRetrieval: client === "claude-code",
   };
 }
+
+test("a client without prompt-context delivery records its turn without automatic retrieval", async () => {
+  const root = await mkdtemp(join(tmpdir(), "memorax-harness-no-injection-"));
+  let requests = 0;
+  const runtime = createHarnessMemoryRuntime({ ...definition("cursor"), automaticRetrieval: false }, {
+    memoraxCodeHome: root,
+    env: {
+      MEMORAX_CODE_MEMORAX_ENDPOINT: "http://memorax.test",
+      MEMORAX_CODE_MEMORAX_API_KEY: "test-key",
+      MEMORAX_CODE_MEMORAX_USER_ID: "test-user",
+      MEMORAX_CODE_MEMORY_RETRIEVAL_ENABLED: "true",
+    },
+    fetchImpl: async () => { requests += 1; throw new Error("undeliverable retrieval must not run"); },
+  });
+  try {
+    const result = await runtime.recordTurnStart({
+      sessionId: "session", clientTurnId: "turn", cwd: root,
+      createdAt: Date.now(), prompt: "A native prompt with no context output channel.",
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.additionalContext, undefined);
+    assert.equal(requests, 0);
+    assert.equal(runtime.size(), 1);
+  } finally {
+    runtime.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

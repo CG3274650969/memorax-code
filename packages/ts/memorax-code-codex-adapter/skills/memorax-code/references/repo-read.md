@@ -19,13 +19,24 @@ Resolve the repository in this order:
 
 Derive memory as `<repo>/.repo_memory`; never ask for a memory-directory path. If the target is not inside a Git worktree, skip maintenance and continue from live files.
 
-`<skill-dir>` is the parent of this file's `references/` directory. The packaged client helper is:
+Select the maintenance helper before running it:
+
+1. Prefer the Repo Memory maintenance helper supplied by the current client's
+   native session context. Use its executable, absolute helper path, and explicit
+   environment with arguments `maintain --repo <repo>`. Treat paths as literal
+   arguments and quote them for the active shell; JSON context is not shell syntax.
+   This applies even when this Skill was imported from another client.
+2. Only when no current-session helper was supplied, use the packaged helper
+   below. `<skill-dir>` is the parent of this file's `references/` directory.
 
 ```bash
 node '<skill-dir>/../../hooks/repo-memory-job.mjs' maintain --repo '<repo>'
 ```
 
-Use it only when it is a regular file. It validates the generated bundle, evaluates the configured local update policy without provider network access, and atomically selects one outcome:
+Use the selected helper only when it is a regular file. If a supplied
+current-session helper is missing or fails, skip maintenance; never fall back to
+the Skill-relative helper or another client's runner. Continue retrieval under the
+existing failure rules below. The helper validates the generated bundle, evaluates the configured local update policy without provider network access, and atomically selects one outcome:
 
 - `bundle_missing` or `bundle_invalid`: start supervised build;
 - a triggered policy decision: start supervised update;
@@ -85,6 +96,15 @@ After it returns:
 - For `up_to_date`, a triggered update, or `active_job`, use consistent hits as best-effort context.
 - For `bundle_missing` or `bundle_invalid`, discard generated hits and continue from live code and maintained documentation.
 - If the helper is unavailable or fails, do not improvise maintenance. Use consistent hits only when they were readable; otherwise use live evidence.
+
+If the selected helper returns `job.delegation`, hand its exact prompt to the named
+`memorax-repo-memory` Cursor native background subagent through the Task tool as
+the next action. This is the helper's supervised execution path. Launch it once,
+then continue the foreground task without waiting. The child must claim the
+provided ticket before authoring and finalize through the helper; a Task launch
+or a model summary alone does not prove completion. If native background Task is
+unavailable, skip this handoff; do not substitute a CLI or foreground authoring.
+Never invent a delegation when the helper returned `active_job` or `up_to_date`.
 
 Do not read repo memory again after `maintain` returns. Do not wait, poll, retry, or expose the command, decision payload, job id, paths, prompt, final message, or logs. Never replace the packaged helper with a generic subagent.
 

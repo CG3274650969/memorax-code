@@ -153,7 +153,7 @@ async function startMockMemorax({ status = 200, body = { success: true, data: { 
   };
 }
 
-async function runSetup({ existingCache = false, explicitCache = false, codexRegistered, hookRuntimeFailure, failStartOnce = false, adapterStartFailure = false, connectionAuthorityFailure = false, runtimeAuthorityFailureCode, officialMode = false, codexConfig, memoraxCodeConfig, memoraxCodeConfigMode, emptyClaudeSettings = false, claudeAvailable = true, claudeVersionFails = false, claudeSettingsText, codexAvailable = true, codexAppOnly = false, vscodeOnly = false, dshProfiles = [], opencodeAvailable = false, opencodeXdgAvailable = false, opencodeCliAvailable = false, codebuddyAvailable = false, codebuddyNativeConfig = false, workbuddyAvailable = false, legacyWorkBuddyInstallation = false, failingBuddyVersion, missingBuddyStatus, traeAvailable = false, skipCodexPluginInstall = false, skipClaudeAdapterInstall = false, skipOpenCodeAdapterInstall = false, skipCodeBuddyAdapterInstall = false, skipWorkBuddyAdapterInstall = false, skipTraeAdapterInstall = false, unavailableStatus = false, prefixedStatus = false, input = "", nativeSetupArgs = [], interactive = true, npmCommand = "install", updateMode = false, setupMode = "automatic", memoraxVerify, memoraxEnv = {}, memoryStatusFixture, tamperApiKeyAfterStart = false, trialProvisionFailure = false, hookSnapshot = [], hookUpdatePlan = [], hookFullReview = false, hookFullReviewMissing = false, hookSnapshotFails = false, hookCheckFails = false, hookTrustFails = false, detectedUserId = "memory-user", detectedLanguage = "zh", ttyOverride } = {}) {
+async function runSetup({ existingCache = false, explicitCache = false, codexRegistered, hookRuntimeFailure, failStartOnce = false, adapterStartFailure = false, connectionAuthorityFailure = false, runtimeAuthorityFailureCode, officialMode = false, codexConfig, memoraxCodeConfig, memoraxCodeConfigMode, emptyClaudeSettings = false, claudeAvailable = true, claudeVersionFails = false, claudeSettingsText, codexAvailable = true, codexAppOnly = false, vscodeOnly = false, dshProfiles = [], opencodeAvailable = false, opencodeXdgAvailable = false, opencodeCliAvailable = false, codebuddyAvailable = false, codebuddyNativeConfig = false, workbuddyAvailable = false, legacyWorkBuddyInstallation = false, failingBuddyVersion, missingBuddyStatus, traeAvailable = false, cursorAvailable = false, skipCodexPluginInstall = false, skipClaudeAdapterInstall = false, skipOpenCodeAdapterInstall = false, skipCodeBuddyAdapterInstall = false, skipWorkBuddyAdapterInstall = false, skipTraeAdapterInstall = false, skipCursorAdapterInstall = false, unavailableStatus = false, prefixedStatus = false, input = "", nativeSetupArgs = [], interactive = true, npmCommand = "install", updateMode = false, setupMode = "automatic", memoraxVerify, memoraxEnv = {}, memoryStatusFixture, tamperApiKeyAfterStart = false, trialProvisionFailure = false, hookSnapshot = [], hookUpdatePlan = [], hookFullReview = false, hookFullReviewMissing = false, hookSnapshotFails = false, hookCheckFails = false, hookTrustFails = false, detectedUserId = "memory-user", detectedLanguage = "zh", ttyOverride } = {}) {
   const root = await mkdtemp(join(tmpdir(), "memorax-code-setup-"));
   const binDir = join(root, "bin");
   const codexHome = join(root, "codex-home");
@@ -166,6 +166,7 @@ async function runSetup({ existingCache = false, explicitCache = false, codexReg
   const codebuddyHome = codebuddyNativeConfig ? join(home, "native-codebuddy-config") : join(home, ".codebuddy");
   const workbuddyCommand = join(home, "Applications", "WorkBuddy.app", "Contents", "Resources", "app.asar.unpacked", "cli", "bin", "codebuddy");
   const traeHome = join(home, ".trae-cn");
+  const cursorHome = join(home, ".cursor");
   const fakeBin = join(root, "fake-bin");
   const libDir = join(root, "lib");
   const nodeModulesDir = join(root, "node_modules");
@@ -193,6 +194,19 @@ async function runSetup({ existingCache = false, explicitCache = false, codexReg
     "}",
     "export function traeInstallationDetected(env = process.env) {",
     "  return env.MEMORAX_CODE_TEST_TRAE_AVAILABLE === '1';",
+    "}",
+    "",
+  ].join("\n"));
+  const cursorAdapterDir = join(libDir, "memorax-code-cursor-adapter", "src");
+  await mkdir(cursorAdapterDir, { recursive: true });
+  await writeFile(join(cursorAdapterDir, "adapter-paths.mjs"), [
+    "import { homedir } from 'node:os';",
+    "import { join, resolve } from 'node:path';",
+    "export function defaultCursorHome(env = process.env, home = homedir()) {",
+    "  return resolve(env.CURSOR_HOME || join(home, '.cursor'));",
+    "}",
+    "export function cursorInstallationDetected(env = process.env) {",
+    "  return env.MEMORAX_CODE_TEST_CURSOR_AVAILABLE === '1';",
     "}",
     "",
   ].join("\n"));
@@ -445,13 +459,14 @@ async function runSetup({ existingCache = false, explicitCache = false, codexReg
     "if (process.argv[2] === 'stop') console.error('fake memorax-code stop output');",
     "const clientsIndex = process.argv.indexOf('--clients');",
     "const clientMode = clientsIndex >= 0 ? process.argv[clientsIndex + 1] : 'all';",
-    "const selectedClients = new Set(clientMode === 'all' ? ['codex', 'claude', 'dsh', 'opencode', 'codebuddy', 'workbuddy', 'trae'] : clientMode.split(','));",
+    "const selectedClients = new Set(clientMode === 'all' ? ['codex', 'claude', 'dsh', 'opencode', 'codebuddy', 'workbuddy', 'trae', 'cursor'] : clientMode.split(','));",
     "const codexEnabled = selectedClients.has('codex');",
     "const claudeEnabled = selectedClients.has('claude');",
     "const opencodeEnabled = selectedClients.has('opencode');",
     "const codebuddyEnabled = selectedClients.has('codebuddy') && process.env.MEMORAX_CODE_TEST_MISSING_BUDDY_STATUS !== 'codebuddy';",
     "const workbuddyEnabled = selectedClients.has('workbuddy') && process.env.MEMORAX_CODE_TEST_MISSING_BUDDY_STATUS !== 'workbuddy';",
     "const traeEnabled = selectedClients.has('trae');",
+    "const cursorEnabled = selectedClients.has('cursor');",
     "const dshEnabled = selectedClients.has('dsh') && process.env.MEMORAX_CODE_TEST_DSH_ENABLED === '1';",
     "if (process.argv[2] === 'status' && process.env.MEMORAX_CODE_TEST_UNAVAILABLE_STATUS === '1') {",
     "  console.error('memorax-code: ok');",
@@ -470,6 +485,7 @@ async function runSetup({ existingCache = false, explicitCache = false, codexReg
     "    if (codebuddyEnabled) console.error('[MemoraX Code Backend]: CodeBuddy adapter: \\x1b[32mok\\x1b[0m integration=hooks skills=ok');",
     "    if (workbuddyEnabled) console.error('[MemoraX Code Backend]: WorkBuddy adapter: \\x1b[32mok\\x1b[0m integration=hooks skills=ok');",
     "    if (traeEnabled) console.error('[MemoraX Code Backend]: Trae adapter: \\x1b[32mok\\x1b[0m integration=hooks skills=installed hook-runtime=unverified');",
+    "    if (cursorEnabled) console.error('[MemoraX Code Backend]: Cursor adapter: \\x1b[32mok\\x1b[0m integration=hooks skills=installed hook-runtime=unverified');",
     "    if (dshEnabled) console.error('[MemoraX Code Backend]: DSH adapter: \\x1b[32mok\\x1b[0m integration=plugin profiles=ok');",
     "    process.exit(0);",
     "  }",
@@ -481,6 +497,7 @@ async function runSetup({ existingCache = false, explicitCache = false, codexReg
     "  if (codebuddyEnabled) console.error('codebuddy adapter: ok integration=hooks skills=ok');",
     "  if (workbuddyEnabled) console.error('workbuddy adapter: ok integration=hooks skills=ok');",
     "  if (traeEnabled) console.error('trae adapter: ok integration=hooks skills=installed hook-runtime=unverified');",
+    "  if (cursorEnabled) console.error('cursor adapter: ok integration=hooks skills=installed hook-runtime=unverified');",
     "  if (dshEnabled) console.error('dsh adapter: ok integration=plugin profiles=ok');",
     "}",
     "process.exit(0);",
@@ -597,6 +614,7 @@ async function runSetup({ existingCache = false, explicitCache = false, codexReg
     }));
   }
   if (traeAvailable) await mkdir(traeHome, { recursive: true });
+  if (cursorAvailable) await mkdir(cursorHome, { recursive: true });
   const cacheMarketplace = existingCache ? "personal" : explicitCache ? "memorax-code" : undefined;
   if (cacheMarketplace) {
     const cacheDir = join(codexHome, "plugins", "cache", cacheMarketplace, "memorax-code-codex-adapter", "0.1.0");
@@ -687,6 +705,7 @@ async function runSetup({ existingCache = false, explicitCache = false, codexReg
     WORKBUDDY_HOME: workbuddyHome,
     CODEBUDDY_CONFIG_DIR: codebuddyNativeConfig ? codebuddyHome : "",
     TRAE_CN_HOME: traeHome,
+    CURSOR_HOME: cursorHome,
     TRAE_HOME: "",
     MEMORAX_CODE_HOME: memoraxCodeHome,
     PATH: codexAppOnly || vscodeOnly
@@ -704,7 +723,9 @@ async function runSetup({ existingCache = false, explicitCache = false, codexReg
     MEMORAX_CODE_SKIP_WORKBUDDY_ADAPTER_INSTALL: skipWorkBuddyAdapterInstall ? "1" : "0",
     MEMORAX_CODE_TEST_MISSING_BUDDY_STATUS: missingBuddyStatus ?? "",
     MEMORAX_CODE_SKIP_TRAE_ADAPTER_INSTALL: skipTraeAdapterInstall ? "1" : "0",
+    MEMORAX_CODE_SKIP_CURSOR_ADAPTER_INSTALL: skipCursorAdapterInstall ? "1" : "0",
     MEMORAX_CODE_TEST_TRAE_AVAILABLE: traeAvailable ? "1" : "0",
+    MEMORAX_CODE_TEST_CURSOR_AVAILABLE: cursorAvailable ? "1" : "0",
     MEMORAX_CODE_TEST_FAIL_START_ONCE: failStartOnce ? "1" : "0",
     MEMORAX_CODE_TEST_ADAPTER_START_FAILURE: adapterStartFailure ? "1" : "0",
     MEMORAX_CODE_TEST_RUNTIME_AUTHORITY_FAILURE: runtimeAuthorityFailureCode
@@ -766,6 +787,7 @@ async function runSetup({ existingCache = false, explicitCache = false, codexReg
     claudeHome,
     opencodeConfigDir,
     traeHome,
+    cursorHome,
     memoraxEndpoint: memoraxServer?.url,
     memoraxRequests: memoraxServer?.requests ?? [],
     activeHookRuntimeBefore,
@@ -1153,6 +1175,7 @@ test("setup seeds the default MemoraX Code config around trial memory preference
       "trace.claude",
       "trace.codebuddy",
       "trace.codex",
+      "trace.cursor",
       "trace.dsh",
       "trace.opencode",
       "trace.trae",
@@ -1880,5 +1903,34 @@ test("automatic update setup refuses a changed Codex marketplace identity", asyn
     await assertSetupIncomplete(run);
   } finally {
     await rm(run.root, { recursive: true, force: true });
+  }
+});
+
+
+test("Cursor-only setup succeeds without Claude and preserves later explicit exclusion", async () => {
+  for (const excluded of [false, true]) {
+    const run = await runSetup({
+      codexAvailable: false,
+      claudeAvailable: false,
+      cursorAvailable: true,
+      ...(excluded ? { updateMode: true, memoraxCodeConfig: "[clients]\ncodex = false\nclaude = false\ndsh = false\nopencode = false\ncodebuddy = false\nworkbuddy = false\ntrae = false\ncursor = false\n" } : {}),
+    });
+    try {
+      assert.equal(run.result.code, 0, run.result.stderr);
+      assert.match(run.result.stderr, /Cursor application: detected/);
+      const mode = excluded ? "none" : "dsh,cursor";
+      assert.ok(run.log.includes("memorax-code start --clients " + mode + " --json"), run.log);
+      assert.ok(run.log.includes("memorax-code status --clients " + mode), run.log);
+      assert.doesNotMatch(run.result.stderr, /Open Cursor Settings and enable Global Hooks/);
+      const config = await readFile(join(run.memoraxCodeHome, "config.toml"), "utf8");
+      assert.match(config, excluded ? /cursor = false/ : /cursor = true/);
+      if (!excluded) {
+        assert.match(config, /\[trace\.cursor\]/);
+        assert.match(run.result.stderr, /memorax-code-cursor status/);
+        await assertSetupComplete(run);
+      }
+    } finally {
+      await rm(run.root, { recursive: true, force: true });
+    }
   }
 });

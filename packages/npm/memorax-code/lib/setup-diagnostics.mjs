@@ -96,7 +96,7 @@ export function printSetupClientDiagnostics(report, write = console.error) {
   return printed;
 }
 
-const CLIENTS = new Set(["codex", "claude", "dsh", "opencode", "codebuddy", "workbuddy", "trae"]);
+const CLIENTS = new Set(["codex", "claude", "dsh", "opencode", "codebuddy", "workbuddy", "trae", "cursor"]);
 
 // The updater consumes this projection over its private child-process channel.
 // Never trust free-form summaries or arbitrary metadata from a child message.

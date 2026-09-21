@@ -11,6 +11,7 @@ import {
   readRepoMemoryJobWorkerContext,
   repoMemoryJobWorkerEnv,
 } from "./repo-memory-job-context.mjs";
+import { gitHead, profileLocalHead, resolveCommit } from "./repo-memory-job-artifacts.mjs";
 import { resolveWindowsCliInvocation } from "../windows-cli-invocation.mjs";
 
 let activeChild;
@@ -454,32 +455,6 @@ function nonEmptyFile(path) {
   } catch {
     return false;
   }
-}
-
-function profileLocalHead(path) {
-  try {
-    const text = readFileSync(path, "utf8").replace(/^\uFEFF/, "");
-    const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
-    if (!match) return undefined;
-    const line = match[1].split(/\r?\n/).find((entry) => /^local_head\s*:/.test(entry.trim()));
-    return stringOption(line?.replace(/^\s*local_head\s*:\s*/, "").trim().replace(/^['"]|['"]$/g, ""));
-  } catch {
-    return undefined;
-  }
-}
-
-function resolveCommit(repo, ref) {
-  const result = spawnSync("git", ["rev-parse", "--verify", `${ref}^{commit}`], {
-    cwd: repo,
-    encoding: "utf8",
-  });
-  return result.status === 0 ? result.stdout.trim() : undefined;
-}
-
-function gitHead(repo) {
-  const head = resolveCommit(repo, "HEAD");
-  if (!head) throw new Error(`git could not resolve HEAD in ${repo}`);
-  return head;
 }
 
 function definedEntries(value) {

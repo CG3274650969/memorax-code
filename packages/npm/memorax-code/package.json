@@ -24,7 +24,8 @@
     "codebuddy",
     "trae",
     "memory",
-    "memorax"
+    "memorax",
+    "cursor"
   ],
   "bin": {
     "memorax-code": "bin/memorax-code.mjs",
@@ -34,7 +35,8 @@
     "memorax-code-codex": "bin/memorax-code-codex.mjs",
     "memorax-code-opencode": "bin/memorax-code-opencode.mjs",
     "memorax-code-codebuddy": "bin/memorax-code-codebuddy.mjs",
-    "memorax-code-trae": "bin/memorax-code-trae.mjs"
+    "memorax-code-trae": "bin/memorax-code-trae.mjs",
+    "memorax-code-cursor": "bin/memorax-code-cursor.mjs"
   },
   "files": [
     "bin",

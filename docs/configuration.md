@@ -46,7 +46,7 @@ are not a compatibility contract.
 ## New configuration
 
 The generated template selects the existing client integrations, including the
-optional CodeBuddy/WorkBuddy and Trae adapters, disables automatic retrieval,
+optional CodeBuddy/WorkBuddy, Trae, and Cursor adapters, disables automatic retrieval,
 enables automatic writeback, sets the preferred language to Chinese (`zh`),
 uses a five-turn skill reminder and the adaptive repository-update policy, and
 enables content-bearing local traces for every supported client. Foreground
@@ -66,10 +66,10 @@ fails rather than performing an unlocked update.
 ## Client selection
 
 If `[clients]` is absent, lifecycle commands select Codex, Claude Code, DSH,
-and OpenCode; CodeBuddy/WorkBuddy and Trae are opt-in unless detected during
+and OpenCode; CodeBuddy/WorkBuddy, Trae, and Cursor are opt-in unless detected during
 foreground setup. If the table is present, `codex`, `claude`, `dsh`,
-`opencode`, `codebuddy`, `workbuddy`, and `trae` are boolean fields. Direct lifecycle
-commands treat omitted `codex`, `claude`, `opencode`, `codebuddy`, `workbuddy`, or `trae`
+`opencode`, `codebuddy`, `workbuddy`, `trae`, and `cursor` are boolean fields. Direct lifecycle
+commands treat omitted `codex`, `claude`, `opencode`, `codebuddy`, `workbuddy`, `trae`, or `cursor`
 values as disabled. Setup and update reconciliation retain an omitted field as
 an undecided choice for client support added after the configuration was
 written. An omitted `dsh` value remains enabled so configurations written
@@ -78,7 +78,7 @@ explicitly to disable that integration. The command-line override accepts a
 comma-separated subset:
 
 ```text
---clients codex|claude|dsh|opencode|codebuddy|workbuddy|trae|<comma-separated subset>|all|none
+--clients codex|claude|dsh|opencode|codebuddy|workbuddy|trae|cursor|<comma-separated subset>|all|none
 ```
 
 Foreground `memorax-code setup` refreshes `[clients]` from the clients
@@ -89,6 +89,8 @@ DSH is available when at least one valid Profile exists under
 `[clients].dsh = false` is preserved. Trae is available when its data home or
 application is detected. `TRAE_CN_HOME`, then `TRAE_HOME`, overrides its
 default `~/.trae-cn` data home.
+Cursor is available when its application or a supported installation path is
+detected, or when `CURSOR_HOME` explicitly selects its configuration root.
 
 On later setup runs, explicit `true` and `false` client choices are preserved.
 A detected client whose field is absent is offered for activation with a
@@ -420,6 +422,164 @@ Turn or maintain a pending queue. The Skill can still perform explicit Repo
 Memory work, but automatic background Repo Memory jobs are unavailable in
 Trae until the client provides a suitable headless worker.
 
+## Cursor integration paths
+
+The Cursor adapter installs native user Hooks, the shared Skill, and a managed
+background subagent:
+
+```text
+~/.cursor/hooks.json
+~/.cursor/skills/memorax-code/
+~/.cursor/agents/memorax-repo-memory.md
+```
+
+`CURSOR_HOME` overrides the root; lifecycle commands also accept `--cursor-home`.
+Later commands reuse the installed root when neither override is supplied.
+Setup merges one marked command for each of `sessionStart`, `beforeSubmitPrompt`,
+`preCompact`, `afterAgentResponse`, and `stop`. It preserves unrelated Hooks, refuses to replace
+an unmanaged `memorax-code` Skill, and does not change Cursor's third-party
+integration setting. This installation is independent of Claude Code. Its private
+ownership record and immutable runtime generations live under
+`$MEMORAX_CODE_HOME/adapters/cursor/`. Stop removes only managed Hook entries and
+retains the Skill and managed subagent; uninstall also removes the managed Skill
+and marked subagent definition. Unrelated or user-owned agent definitions are
+preserved, and a conflicting user-owned definition is not overwritten.
+Readiness checks the complete installed runtime against its recorded content
+digest. Missing or changed dependencies make the adapter unavailable; enable
+rejects that damaged immutable generation instead of modifying it in place.
+An intact older generation remains valid independently of newer package contents.
+
+The native conversation database is separate from `CURSOR_HOME`. Its default
+location is:
+
+| Platform | Native database |
+| --- | --- |
+| macOS | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` |
+| Linux | `${XDG_CONFIG_HOME:-~/.config}/Cursor/User/globalStorage/state.vscdb` |
+| Windows | `%APPDATA%\Cursor\User\globalStorage\state.vscdb`; when `APPDATA` is absent, use `%USERPROFILE%\AppData\Roaming` |
+
+Hooks also honor Cursor's `VSCODE_PORTABLE` (`user-data` beneath that directory)
+and `VSCODE_APPDATA` (`Cursor` beneath that directory) when present. For a custom
+`--user-data-dir`, set `MEMORAX_CODE_CURSOR_DATABASE_PATH` to the absolute
+`User/globalStorage/state.vscdb` path before enabling or restarting the adapter.
+The explicit path is saved in the private runtime generation and retained by
+later lifecycle commands. A Hook's explicit environment override takes
+precedence over that saved path; otherwise it uses the native defaults above.
+An invalid override is rejected, without falling back to another database.
+Default paths are resolved when the Hook runs rather than saved during setup.
+
+Database reading requires a Backend Node.js runtime with built-in `node:sqlite`;
+use Node.js 22.13 or later. The module is available without an experimental
+flag from that release ([Node.js SQLite documentation](https://nodejs.org/api/sqlite.html)).
+Older runtimes can still run the shared Skill and explicit memory commands,
+but skip Cursor's Turn registration, prompt reminders, automatic Add, and
+compaction restoration.
+
+Restart or refresh Cursor and open a new conversation after setup.
+`memorax-code-cursor status --json` reports `cursorHooks.status` as `unverified`
+until a managed Hook runs, then `observed`. Turn-bound memory operations accept
+one workspace root for ordinary workspaces or an empty `workspace_roots` array
+for the projectless `General` case. The latter does not require a physical root.
+Ambiguous or missing roots skip those operations, while session-start guidance
+can still be injected. Cursor Hook ingress rejects a projectless identity that
+also supplies a `cwd`. Valid workspace, database, and transcript paths retain
+their exact bytes, including trailing whitespace.
+
+Managed Cursor Hooks have a 150-second native timeout. Readiness verifies this
+value as well as the command; a missing or edited timeout is not configured,
+and enabling the adapter restores its managed entries. Backend recovery has a
+90-second maximum, with an initial health probe of at most 1.5 seconds; the
+remaining budget covers event delivery and local context preparation.
+`MEMORAX_CODE_CURSOR_ENSURE_TIMEOUT_MS` and
+`MEMORAX_CODE_CURSOR_START_TIMEOUT_MS` may lower the health and recovery limits
+respectively. Larger values are capped at 1500 and 90000 milliseconds; invalid
+values use those defaults. A healthy Backend does not wait for these deadlines.
+
+`sessionStart` injects the shared Skill rules and explicit CLI context through
+Cursor's native `additional_context` and `env` fields. The environment is only
+guaranteed to reach later Hooks. When the agent runs `memorax-cli`, it must set
+`MEMORAX_CODE_MEMORY_CLI_TRACE_CLIENT=cursor` and
+`MEMORAX_CODE_MEMORY_CLI_TRACE_SESSION_ID` to the conversation ID supplied in
+that context, using the command's shell environment. Shell inheritance is not
+assumed. The Skill provides explicit Search, manual Add, and Repo Memory work. After an
+accepted nonempty turn-start with a Backend-authorized Git worktree, Cursor also
+prepares a missing-bundle build and supplies its native background delegation to
+the foreground agent. The foreground agent launches `memorax-repo-memory` with
+the native Task tool and continues its task. The Hook itself does not launch a
+Task. Missing native background capability skips this work without selecting a
+CLI or foreground authoring fallback.
+
+For read-triggered Repo Memory maintenance, native session context supplies the
+Node executable, absolute helper path in the active Cursor runtime generation,
+and explicit MemoraX home environment. The shared Skill prefers that entrypoint
+even when Cursor imports a second copy from Claude Code. A missing or failed
+session-supplied helper skips maintenance without selecting another client's
+runner. The same routing context accompanies first-turn, periodic, and proven
+post-compaction reminders; shell environment inheritance is not required.
+
+After the Backend confirms turn registration, `beforeSubmitPrompt` returns shared Skill
+reminders and local personal-memory context through native `additional_context`.
+User Profile preferences are included on the first eligible turn; Procedure
+Memory follows the first-turn and configured reminder cadence. Personal contents
+are read only from a Backend-authorized Git worktree. Without that authority, an
+accepted turn can still receive generic reminders.
+
+For compaction, `preCompact` only records a native database baseline; it does not
+inject context or prove that compaction succeeded. The Backend compares later
+native root-message and summary-archive references with that baseline. New
+archives must extend the recorded archive prefix and account for replacement of
+the observed root messages. Only then can the next nonempty, registered prompt
+restore User Profile preferences and the personal-memory reminder through its
+authorized worktree. Each proven archive replacement permits one local restoration
+request; delivery is best-effort, so a lost HTTP response or Hook termination can
+lose the reminder, and model receipt is not acknowledged. Procedure Memory
+keeps its normal cadence; compaction does not make it due earlier. Empty Continue
+prompts do not deliver or consume the pending restoration. Missing database
+access or a baseline, incompatible history, and unproven replacement skip this
+recovery. There is no immediate-delivery guarantee during the same long-running
+task.
+
+Prompt-context delivery requires a Cursor interface that consumes
+`beforeSubmitPrompt.additional_context`. Static inspection of Cursor 3.21.9's
+desktop Composer confirms the native handling path. A local synthetic Hook
+probe also confirmed that the context is persisted in native UserMessage field
+21 separately from the unchanged prompt text in field 1. A completed model
+response exactly echoed a marker supplied only through the Hook, confirming
+model receipt in that synthetic probe. This does not validate the complete
+production Backend/MemoraX flow or establish compatibility with older releases
+or other interfaces.
+A separate local manual-compaction probe verified native root replacement and
+archiving, but did not verify model receipt after compaction. The restoration
+integration is covered by synthetic tests, not a complete real-client end-to-end
+validation.
+Automatic prompt retrieval remains disabled for Cursor even when
+`[memory.retrieval].enabled` is true. Search remains available through the Skill
+and CLI.
+
+Automatic Add reads only native database user messages and public assistant steps.
+A normal or edited prompt needs an exact native request ID and matching prompt
+and final-response digests, plus a completed Stop. A transcript path is optional
+local provenance and is not used to reconstruct content. The first turn can be
+read after completion even if no transcript existed at submission.
+
+Continue with an empty prompt requires a locally observed terminal predecessor.
+Before the new generation starts, the Backend binds its original native user and
+captures the preceding turn references and existing step prefix. Completion must
+preserve that binding and append a unique final public answer matching the new
+response digest. This does not claim that the starting snapshot contains every
+previous step. Unbound continuations, branch/prefix rewrites, unknown content,
+ambiguous answers, and interrupted runs skip writeback.
+
+Pending database content and local enqueue rejection are retried for up to 30
+seconds without another Hook. Restart restores pending retries within that same
+deadline. A new prompt makes one last exact read before retiring a pending prior
+generation; it never guesses from another turn. Continue baseline capture has a
+short bounded wait before prompt submission; if binding remains unavailable it
+skips that generation. Acceptance consumes metadata and prevents replay. Native
+SQLite/protobuf interpretation is a private-format integration; unknown content
+fails closed. Tool, thinking, simulated/steered user, and unsupported external-text
+records never become fallback Add content.
+
 ## MemoraX connection
 
 MemoraX is the required remote-memory service:
@@ -461,11 +621,12 @@ conditional anonymous-account guidance.
 workspaces. Recognized default chat directories instead share
 `<base-user-id>@General`, with `scopeKind: general`:
 
-| Client | Recognized default chat directory |
+| Client | Recognized default chat directory or context |
 | --- | --- |
 | Codex | Its canonical dated-task location, previously named `Codex-General` in MemoraX. |
 | WorkBuddy | A valid `YYYY-MM-DD-HH-mm-ss` direct child of `~/WorkBuddy`, or of WorkBuddy's configured `defaultWorkspacePath`. |
 | OpenCode | The exact `Default Project` directory under the system Documents directory, including supported Documents redirection. |
+| Cursor | A conversation with no selected workspace or folder (`workspace_roots: []`); no physical directory is required. |
 
 A verified Git repository takes precedence over default-directory detection.
 Other selected directories retain the ordinary repository or folder rules;
@@ -506,6 +667,9 @@ The TOML form of `memory_type_order` is an array of strings; the environment
 form is comma-separated. `enabled` controls automatic prompt retrieval only.
 Explicit `memorax-cli search` remains available when
 credentials and a trusted workspace scope resolve.
+Cursor does not perform automatic prompt retrieval; enabling this setting does
+not change that behavior. Its prompt Hook context is used for local reminders
+and personal memory.
 
 ## Writeback and explicit add
 
@@ -600,6 +764,7 @@ native content records when available. The selected sources are:
 | OpenCode | Original SDK user `time.created` | Final SDK assistant `time.completed` |
 | CodeBuddy/WorkBuddy | Selected transcript user record, when supplied | Selected completed assistant record, when supplied |
 | Trae | Persisted prompt Hook observation | Stop Hook observation |
+| Cursor | Persisted prompt Hook observation | Matching response Hook observation |
 
 A native record timestamp is not necessarily the exact UI submit or last-token
 time. Missing or invalid native timestamps use a known Turn-start observation
@@ -609,7 +774,7 @@ These fallback times are fixed before buffering and provider retries.
 
 Each automatic Add includes `metadata.memorax_code_timestamp_sources`, aligned
 with its `messages` array: `native` means a selected native record/event time,
-and `observed` means a local observation. Trae always uses `observed`. Explicit
+and `observed` means a local observation. Trae and Cursor always use `observed`. Explicit
 Add callers that do not supply source information leave this metadata absent;
 an unlabelled message in a mixed-source request is `unspecified`.
 
@@ -653,9 +818,16 @@ override is `MEMORAX_CODE_MEMORY_SKILL_REMINDER_INTERVAL_TURNS`. A positive
 value controls the native skill reminder cadence for supported client
 sessions, beginning with the first eligible prompt or Turn. The same interval
 controls trusted repo-scoped Procedure Memory. User Profile preferences are
-applied on first observation and restored with a personal-memory reminder
-after successful context compaction. These local contexts remain separate
-from automatic writeback content.
+applied on first observation and, in integrations with a native compaction
+completion signal, restored with a personal-memory reminder after successful
+context compaction. These local contexts remain separate from automatic
+writeback content.
+Cursor supplies a generic reminder at session start and uses the shared first-turn
+and periodic cadence after the Backend confirms turn registration. It injects trusted User
+Profile preferences on the first eligible turn and Procedure Memory with that
+cadence, and its Skill can also read authorized repository memory explicitly. After
+an accepted turn-start with an authorized Git worktree, Cursor schedules the
+supervised missing-bundle build described below.
 
 The repository-update fields below belong in `[memory.repo_update]`.
 
@@ -669,7 +841,7 @@ Supported policies are `every-commit`, `commit-count`, `daily`,
 `pull-request`, `pull-request-or-daily`, and `adaptive`. Invalid policy values
 fall back to `adaptive`.
 
-In Codex, Claude Code, CodeBuddy/WorkBuddy, DSH, and OpenCode, the first
+In Codex, Claude Code, CodeBuddy/WorkBuddy, DSH, OpenCode, and Cursor, the first
 eligible prompt starts a background build only when the Backend has authorized
 a Git worktree and that worktree has no `.repo_memory/PROFILE.md`. If the
 Backend or workspace authority is unavailable, the client integration skips
@@ -686,13 +858,30 @@ the grace period before the worker force-terminates a client that ignores
 `codebuddy_timeout` (or `<runner>_timeout`) in the job state, so a stalled
 headless client cannot leave an active job and repository marker indefinitely.
 
-A relevant repo-read runs supervised maintenance in the five headless-capable
+A relevant repo-read runs supervised maintenance in the six background-capable
 client integrations. The configured policy may select a build, update, or
 no-op. DSH maintenance requires an enabled, managed Profile that includes
 `@deepseek-ai/dsh-headless`. OpenCode executes the job through its active local
 server. Desktop-only installations do not require a standalone `opencode`
 executable in `PATH`. Trae users can invoke the Skill explicitly, but Trae is
-not an automatic maintenance runner.
+not an automatic maintenance runner. Cursor uses its managed native background
+subagent for both initial build and read-triggered maintenance. No standalone
+Cursor CLI, additional SDK, or CLI authentication is required; legacy
+`MEMORAX_CODE_CURSOR_AGENT_COMMAND` and `CURSOR_AGENT_COMMAND` overrides no longer
+select a Repo Memory runner. The subagent inherits the Cursor model and normal
+tool permissions, so Cursor may ask for command approval.
+
+The Cursor helper returns a delegation only for a newly reserved job. The child
+claims that job before entering the shared build/update workflow and finalizes
+it through local snapshot and bundle checks. Repository jobs deduplicate across
+clients using the shared marker. Requested and claimed tasks are not completed
+jobs; an expired or replaced claim cannot finalize. If a finish helper stops
+during validation, the child can retry finish or abort with the same claim
+capability. Retrying reruns validation; only one terminal result is accepted,
+and a late validator cannot overwrite an abort or replacement. The bounded lease
+does not terminate a native task or guarantee progress while Cursor is closed. Native
+subagent sessions and simulated completion notifications do not enter automatic
+Add. Parent conversation content retains its ordinary writeback rules.
 
 ## Default Search/Add diagnostics
 
@@ -759,10 +948,27 @@ records known failures after a valid command reaches its native-content or
 writeback handling. Automatic Add records a terminal failure after the existing
 retry policy finishes, rather than recording every retry. Disabled writeback,
 normal buffering, duplicate handling, interruption, and empty eligible content
-do not create failure records. There is no persistent cross-process failure
-deduplication state. Records describe observed failures; their absence does not
-prove that a Hook ran or that MemoraX accepted a turn. See
+do not create failure records. Cursor keeps bounded diagnostic keys in its
+private session state to suppress repeated reports for the same operation, Turn,
+and reason across Hooks and Backend restarts. Native classification failures
+before registration are deduplicated by session and reason, including across
+new Turns; this diagnostic-only state does not register a Turn or bind a workspace.
+This is best-effort when local
+storage is unavailable and does not alter writeback authority or consume pending
+content. Other clients do not persist deduplication keys. Records describe
+observed failures; their absence does not prove that a Hook ran or that MemoraX
+accepted a turn. See
 [background failure recovery](troubleshooting.md#hook-ran-but-automatic-writeback-is-missing).
+
+Cursor automatic-writeback database reads are quiet while matching content is
+still being persisted. If the bounded retry window ends without an exact native
+match, the Backend writes one `CURSOR_NATIVE_CONTENT_TIMEOUT` record and retains the
+pending Turn metadata. A later matching completion Hook, or the final exact read
+before a new prompt replaces that Turn, can still enqueue it if the exact native
+content becomes available. A Backend restart alone does not extend the retry
+deadline. Non-retryable database, correlation, native-format, or workspace
+failures are recorded when observed. Compaction reads have no background retry;
+their unavailable baseline or restoration reads are recorded at the failed Hook.
 
 ## Backend lifecycle diagnostics
 
@@ -814,7 +1020,7 @@ nor configuration or response content. See
 ## Local traces
 
 `[trace.codex]`, `[trace.claude]`, `[trace.dsh]`, `[trace.opencode]`,
-`[trace.codebuddy]`, `[trace.workbuddy]`, and `[trace.trae]` support the same fields:
+`[trace.codebuddy]`, `[trace.workbuddy]`, `[trace.trae]`, and `[trace.cursor]` support the same fields:
 
 | Field | Codex environment | Claude environment | DSH environment | OpenCode environment | CodeBuddy CLI environment | Trae environment | Fallback |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -828,6 +1034,7 @@ WorkBuddy uses the corresponding `MEMORAX_CODE_WORKBUDDY_TRACE_*` variables,
 falling back to the older `MEMORAX_CODE_CODEBUDDY_TRACE_*` variables when absent.
 When `[trace.workbuddy]` is absent, its configuration inherits the older
 `[trace.codebuddy]` settings so existing trace preferences survive migration.
+Cursor uses the corresponding `MEMORAX_CODE_CURSOR_TRACE_*` environment variables.
 
 Depending on the enabled client capabilities, content capture can include
 prompts, responses, recalled memory, writeback content, reminder text, and
@@ -854,6 +1061,11 @@ not copy that log into trace.
 Trae trace contains only normalized lifecycle and memory-operation events from
 the validated Hook pair. Trae does not expose a raw Session authority for
 MemoraX Code to copy.
+
+Cursor trace records normalized Hook and memory-operation events. Its native
+database remains Cursor-owned and is read only; private writeback state retains
+database and optional transcript paths, native identity, reference/digest
+boundaries, scope, and retry deadlines. These records do not retain QA text.
 
 ## Backend runtime settings
 
@@ -906,6 +1118,7 @@ memorax-code status --clients dsh
 memorax-code-opencode doctor
 memorax-code-codebuddy status --json
 memorax-code-trae status --json
+memorax-code-cursor status --json
 ```
 
 The status commands do not print the MemoraX API key or Backend token.

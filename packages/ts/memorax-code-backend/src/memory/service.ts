@@ -20,12 +20,14 @@ import {
 } from "../clients/opencode/memory-hook-runtime.js";
 import { createCodeBuddyMemoryHookRuntime, type CodeBuddyMemoryHookWritebackResult } from "../clients/codebuddy/memory-hook-runtime.js";
 import { createTraeMemoryHookRuntime, type TraeMemoryHookWritebackResult } from "../clients/trae/memory-hook-runtime.js";
+import { createCursorMemoryHookRuntime, type CursorMemoryHookPreCompactResult, type CursorMemoryHookWritebackResult } from "../clients/cursor/memory-hook-runtime.js";
 import { createMemoryTurnCoordinator } from "./turn-coordinator.js";
 import {
   createRepositoryMemorySessionRuntime,
 } from "./repository-session.js";
 import { createPendingQuotaNoticeRuntime } from "./quota-notice.js";
 import type {
+  CursorPreCompactCommand,
   MemoryHookTurnStartResult,
   TurnStartCommand,
   WritebackCommand,
@@ -42,10 +44,12 @@ type MemoryHookWritebackResult =
   | OpenCodeMemoryHookWritebackResult
   | DshMemoryHookWritebackResult
   | CodeBuddyMemoryHookWritebackResult
-  | TraeMemoryHookWritebackResult;
+  | TraeMemoryHookWritebackResult
+  | CursorMemoryHookWritebackResult;
 
 export type MemoryService = {
   recordTurnStart(command: TurnStartCommand): Promise<MemoryHookTurnStartResult>;
+  recordPreCompact(command: CursorPreCompactCommand): Promise<CursorMemoryHookPreCompactResult>;
   writebackTurn(command: WritebackCommand): Promise<MemoryHookWritebackResult>;
   drain(): Promise<void>;
   close(): void;
@@ -114,6 +118,12 @@ export function createMemoryService(options: MemoryServiceOptions = {}): MemoryS
     repositoryMemorySession,
     turnCoordinator,
   });
+  const cursorHook = createCursorMemoryHookRuntime({
+    ...options,
+    pendingQuotaNotice,
+    repositoryMemorySession,
+    turnCoordinator,
+  });
   async function observeWriteback(command: WritebackCommand, pending: Promise<MemoryHookWritebackResult>): Promise<MemoryHookWritebackResult> {
     const result = await pending;
     if (!result.scheduled) {
@@ -132,6 +142,9 @@ export function createMemoryService(options: MemoryServiceOptions = {}): MemoryS
   }
   let closed = false;
   return {
+    async recordPreCompact(command) {
+      return await cursorHook.recordPreCompact(command);
+    },
     async recordTurnStart(command) {
       switch (command.client) {
         case "codex":
@@ -148,6 +161,8 @@ export function createMemoryService(options: MemoryServiceOptions = {}): MemoryS
           return await workBuddyHook.recordTurnStart(command);
         case "trae":
           return await traeHook.recordTurnStart(command);
+        case "cursor":
+          return await cursorHook.recordTurnStart(command);
       }
       return unsupportedMemoryHookCommand(command);
     },
@@ -167,6 +182,9 @@ export function createMemoryService(options: MemoryServiceOptions = {}): MemoryS
           return await observeWriteback(command, workBuddyHook.writeback(command));
         case "trae":
           return await observeWriteback(command, traeHook.writeback(command));
+        case "cursor":
+          // Cursor owns failure reporting, including retries after this request ends.
+          return await cursorHook.writeback(command);
       }
       return unsupportedMemoryHookCommand(command);
     },
@@ -183,6 +201,7 @@ export function createMemoryService(options: MemoryServiceOptions = {}): MemoryS
       codeBuddyHook.close();
       workBuddyHook.close();
       traeHook.close();
+      cursorHook.close();
       turnCoordinator.close();
       repositoryMemorySession.close();
       automaticWriteback.close();
