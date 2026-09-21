@@ -83,7 +83,7 @@ Please allow time for triage and remediation before public disclosure.
   authority and must not be copied between users or edited by hand.
 - The managed CodeBuddy/WorkBuddy plugin reads native JSONL transcripts from the
   client-owned project history and sends only normalized turn data required for
-  retrieval, trace, or writeback.
+  correlation, trace, or writeback.
 - The Cursor adapter manages only its marked native user Hooks and shared Skill
   under `CURSOR_HOME` (default `~/.cursor`), independently of Claude Code. It
   preserves unrelated configuration and Cursor's third-party integration switch.
@@ -95,7 +95,6 @@ Please allow time for triage and remediation before public disclosure.
   UI bubble, JSONL fallback, tool text, or thinking content is sent to MemoraX.
   Ambiguous or unsupported content and interrupted runs do not write back. Hook
   response text is used only for digest comparison, never as fallback content.
-  Cursor has no automatic prompt retrieval.
 - The managed Trae adapter merges only marker-owned `SessionStart`,
   `UserPromptSubmit`, and `Stop` entries into Trae's `hooks.json`, refuses to
   replace an unmanaged `memorax-code` Skill, and removes only managed assets.
@@ -186,15 +185,14 @@ user can also explicitly run `memorax-code account --show-mark-id` directly in
 a local terminal. Neither path prints the API key. Treat conversations,
 screenshots, and logs containing a displayed Mark ID as sensitive.
 
-MemoraX-backed search, retrieval, and writeback require a Base User ID, API
+MemoraX-backed Search, Add, and automatic writeback require a Base User ID, API
 key, and network access. Foreground setup discloses automatic writeback before
-creating or accepting credentials. Completing setup activates search/add and
-the generated configuration's automatic writeback; automatic retrieval
-remains disabled until explicitly enabled.
+creating or accepting credentials. Completing setup activates Search/Add and
+the generated configuration's automatic writeback.
 
-Memory searches send the query and repository-scoped identity to MemoraX.
-When DSH, OpenCode, or Trae automatic retrieval is enabled, each eligible direct user
-prompt is used as the search query.
+Memory searches send the query and repository-scoped identity to MemoraX when
+the agent or user invokes `memorax-cli search`. Hooks do not send prompts to
+MemoraX for Search.
 Active adds and automatic writeback send the selected content needed to create
 memory. Automatic writeback may include selected user instructions and the
 matching final assistant response from an exact Codex rollout, Claude Code or

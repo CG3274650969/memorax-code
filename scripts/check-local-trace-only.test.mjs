@@ -336,7 +336,7 @@ test("local-only trace gate rejects an unreviewed trace-aware MemoraX caller", a
     });
     assert.equal(initialized.status, 0, initialized.stderr);
     await writeFile(
-      join(sourceDir, "memory", "automatic-retrieval.ts"),
+      join(sourceDir, "memory", "automatic-writeback.ts"),
       [
         'import { invokeMemoraxMemoryProvider } from "../provider/memorax/adapter.js";',
         'import { readCurrentTraceTurn } from "../trace/store.js";',
@@ -350,7 +350,7 @@ test("local-only trace gate rejects an unreviewed trace-aware MemoraX caller", a
 
     const result = await runChecker(undefined, copiedChecker);
     assert.equal(result.code, 1);
-    assert.match(result.stderr, /memory\/automatic-retrieval\.ts: unreviewed trace-aware outbound bridge/);
+    assert.match(result.stderr, /memory\/automatic-writeback\.ts: unreviewed trace-aware outbound bridge/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

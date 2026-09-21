@@ -258,7 +258,7 @@ async function main() {
   assert.equal(status.dshAdapter?.integration, "plugin");
   backendPid = validPid((await readJson(backendStatePath)).pid);
 
-  progress("running a real DSH Turn through Search, personal context, skill, Repo Memory, and Add");
+  progress("running a real DSH Turn through tracking, personal context, skill, Repo Memory, and Add");
   const firstLlmRequest = llmServer.requests.length;
   const repoMemoryHelperSource = await readFile(profileRepoMemoryHelper, "utf8");
   await writeFile(profileRepoMemoryHelper, repoMemoryDispatchRecorderSource(), "utf8");
@@ -275,14 +275,14 @@ async function main() {
     await writeFile(profileRepoMemoryHelper, repoMemoryHelperSource, "utf8");
   }
   await waitFor(() => requests("/v1/memories/add").length === 1, "first Add");
-  assert.equal(requests("/v1/memories/search")[0]?.body?.query, FIRST_PROMPT);
+  assert.equal(requests("/v1/memories/search").length, 0);
   assertAdd(requests("/v1/memories/add")[0], FIRST_PROMPT);
   const firstLlmRequests = llmServer.requests.slice(firstLlmRequest);
   assert.ok(firstLlmRequests.length >= 2);
   const firstModelRequest = firstLlmRequests.find((request) =>
     JSON.stringify(request.body).includes(FIRST_PROMPT));
   assert.ok(firstModelRequest);
-  assert.match(JSON.stringify(firstModelRequest.body), new RegExp(RECALL));
+  assert.doesNotMatch(JSON.stringify(firstModelRequest.body), new RegExp(RECALL));
   assert.match(JSON.stringify(firstModelRequest.body), new RegExp(USER_PROFILE));
   assert.match(JSON.stringify(firstModelRequest.body), new RegExp(PROCEDURE_MEMORY));
   assert.match(JSON.stringify(firstModelRequest.body), new RegExp(MEMORY_REMINDER));
@@ -293,7 +293,7 @@ async function main() {
   const [, firstSession] = firstSessionEntry;
   const firstSessionId = JSON.parse(firstSession.split("\n", 1)[0]).id;
   assert.ok(typeof firstSessionId === "string" && firstSessionId);
-  assert.match(firstSession, new RegExp(RECALL));
+  assert.doesNotMatch(firstSession, new RegExp(RECALL));
   assert.match(firstSession, new RegExp(USER_PROFILE));
   assert.match(firstSession, new RegExp(PROCEDURE_MEMORY));
   assert.match(firstSession, new RegExp(MEMORY_REMINDER));
@@ -394,7 +394,7 @@ async function main() {
   const resumeStartIndex = interruptedTrace.findIndex((event) => event.type === "turn_start"
     && event.trace?.turn_id === String(resumeTurn));
   assert.ok(interruptedTrace.indexOf(crashTurnEnds[0]) < resumeStartIndex,
-    "interrupted reconciliation did not finish before resumed retrieval");
+    "interrupted reconciliation did not finish before resumed Turn tracking");
 
   progress("recovering a crashed Backend from the current DSH generation");
   const crashedPid = backendPid;
@@ -408,7 +408,7 @@ async function main() {
     resolve(initialState.runtimeBundleRoot));
   backendPid = validPid((await readJson(backendStatePath)).pid);
   assert.notEqual(backendPid, crashedPid);
-  assert.equal(requests("/v1/memories/search").at(-1)?.body?.query, RECOVERY_PROMPT);
+  assert.equal(requests("/v1/memories/search").length, 0);
   assertAdd(requests("/v1/memories/add").at(-1), RECOVERY_PROMPT);
 
   progress("reconciling a Profile created after installation");

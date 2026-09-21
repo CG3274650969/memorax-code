@@ -360,7 +360,6 @@ assert config_sections == {
     "clients",
     "memorax",
     "memory.add",
-    "memory.retrieval",
     "memory.repo_update",
     "memory.skill_reminder",
     "memory.writeback",

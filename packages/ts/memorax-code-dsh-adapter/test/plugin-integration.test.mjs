@@ -19,7 +19,7 @@ import {
 const MEMORY_REMINDER_CONTEXT = memorySkillReminderContext("/memorax-code");
 const PERSONAL_MEMORY_REMINDER_CONTEXT = personalMemoryReminderContext("/memorax-code");
 
-test("retrieves once and writes the exact durable top-level DSH Turn", async () => {
+test("records once and writes the exact durable top-level DSH Turn", async () => {
   const deferred = [];
   const calls = [];
   const personalContextCalls = [];
@@ -106,7 +106,7 @@ test("retrieves once and writes the exact durable top-level DSH Turn", async () 
     form: "notice",
     summary: "MemoraX Code",
   });
-  assertContext(decision, "Relevant shared memory", MEMORY_REMINDER_CONTEXT,
+  assertContext(decision, MEMORY_REMINDER_CONTEXT,
     PERSONAL_MEMORY_REMINDER_CONTEXT, MEMORY_IMPACT_REMINDER_CONTEXT,
     "Active user profile", "Active procedure memory");
   assert.deepEqual(reminders, [{
@@ -146,7 +146,7 @@ test("retrieves once and writes the exact durable top-level DSH Turn", async () 
     step: 1,
     signal: new AbortController().signal,
   }, next);
-  assert.equal(turnStarts.length, 1, "retrieval is attempted at most once per Turn");
+  assert.equal(turnStarts.length, 1, "Turn start is recorded at most once per Turn");
 
   const recall = decision.messages[2];
   persisted = {
@@ -196,7 +196,7 @@ test("retrieves once and writes the exact durable top-level DSH Turn", async () 
     signal: new AbortController().signal,
   }, async () => ({ kind: "enter", messages: [directUser] }));
   assert.equal(childDecision.messages.length, 1);
-  assert.equal(turnStarts.length, 1, "subagent sessions do not retrieve");
+  assert.equal(turnStarts.length, 1, "subagent sessions do not record Turn starts");
   assert.equal(isMemoryEligibleSession(topLevelSession({ origin: "unknown" })), false);
   assert.equal(personalContextCalls.length, 1, "subagent sessions do not read local personal context");
 
@@ -221,7 +221,7 @@ test("retrieves once and writes the exact durable top-level DSH Turn", async () 
   assert.equal(turnStarts.length, 2, "an ordinary user fork remains memory eligible");
   assert.equal(turnStarts[1].sessionId, fork.id);
   assert.equal(personalContextCalls.length, 2, "an ordinary user fork gets first-observation context");
-  assertContext(forkDecision, "Relevant shared memory", MEMORY_REMINDER_CONTEXT,
+  assertContext(forkDecision, MEMORY_REMINDER_CONTEXT,
     PERSONAL_MEMORY_REMINDER_CONTEXT, MEMORY_IMPACT_REMINDER_CONTEXT,
     "Active user profile", "Active procedure memory");
 
@@ -230,7 +230,7 @@ test("retrieves once and writes the exact durable top-level DSH Turn", async () 
     assert.doesNotMatch(beforeCadence.messages.at(-1).content[0].text, /MemoraX Code reminder:/);
   }
   const nextCadence = await runTurnStartStep(ctx, fork, 7, fork.events.length);
-  assertContext(nextCadence, "Relevant shared memory", MEMORY_REMINDER_CONTEXT,
+  assertContext(nextCadence, MEMORY_REMINDER_CONTEXT,
     MEMORY_IMPACT_REMINDER_CONTEXT, "Active procedure memory");
 });
 
@@ -600,7 +600,7 @@ test("commits and traces a reminder only after DSH accepts its user message", as
   assert.deepEqual(reminders.map((reminder) => reminder.triggers), [["cadence"]]);
 });
 
-test("does not read local personal context when Backend retrieval fails", async () => {
+test("does not read local personal context when Backend Turn registration fails", async () => {
   const scheduledRepos = [];
   let personalContextLoads = 0;
   const session = topLevelSession();
@@ -670,9 +670,9 @@ test("loads personal context only after Backend authorizes a repository worktree
   assert.deepEqual(scheduledRepos, ["/workspace/authorized-project"]);
 });
 
-test("keeps Backend recall when local context fails and retries it on the next Turn", async () => {
+test("keeps the generic reminder when local context fails and retries it on the next Turn", async () => {
   let personalContextAttempts = 0;
-  let retrievals = 0;
+  let turnStarts = 0;
   const session = topLevelSession();
   const ctx = mockContext({
     flush: async () => true,
@@ -681,8 +681,8 @@ test("keeps Backend recall when local context fails and retries it on the next T
   registerMemoraxCodePlugin(ctx, pluginDependencies({
     backendClient: {
       async recordTurnStart() {
-        retrievals += 1;
-        return retrievals === 1
+        turnStarts += 1;
+        return turnStarts === 1
           ? {
               ok: true,
               additionalContext: "Relevant shared memory",
@@ -703,7 +703,7 @@ test("keeps Backend recall when local context fails and retries it on the next T
   }));
 
   const decision = await runTurnStartStep(ctx, session, 1, 0);
-  assertContext(decision, "Relevant shared memory", MEMORY_REMINDER_CONTEXT);
+  assertContext(decision, MEMORY_REMINDER_CONTEXT);
   const sameTurn = await ctx.waterfall("agent/pre-step", preStep(session, 1, 2), enterDecision());
   assert.equal(sameTurn.messages.length, 1);
   assert.equal(personalContextAttempts, 1);
@@ -714,7 +714,7 @@ test("keeps Backend recall when local context fails and retries it on the next T
 });
 
 test("does not consume personal context when runtime authority is removed mid-step", async () => {
-  const retrieval = Promise.withResolvers();
+  const turnStartRequest = Promise.withResolvers();
   let enabled = true;
   let personalContextAttempts = 0;
   const session = topLevelSession();
@@ -727,7 +727,7 @@ test("does not consume personal context when runtime authority is removed mid-st
       if (!enabled) throw new Error("integration disabled");
     },
     backendClient: {
-      async recordTurnStart() { return await retrieval.promise; },
+      async recordTurnStart() { return await turnStartRequest.promise; },
       async writebackTurn() {},
     },
     loadPersonalContext: async () => {
@@ -755,7 +755,7 @@ test("does not consume personal context when runtime authority is removed mid-st
   assert.equal(cancelledFollower.messages.length, 1);
 
   enabled = false;
-  retrieval.resolve({ ok: true, repoMemoryWorktree: "/workspace/project" });
+  turnStartRequest.resolve({ ok: true, repoMemoryWorktree: "/workspace/project" });
   const disabled = await pending;
   assert.equal(disabled.messages.length, 1);
   assert.equal(personalContextAttempts, 0);
@@ -979,7 +979,7 @@ test("drains an accepted Turn writeback during Cordis disposal", async () => {
   assert.equal(disposed, true);
 });
 
-test("aborts in-flight retrieval during Cordis disposal", async () => {
+test("aborts in-flight Turn registration during Cordis disposal", async () => {
   const started = Promise.withResolvers();
   const ctx = mockContext({
     flush: async () => true,
@@ -1000,7 +1000,7 @@ test("aborts in-flight retrieval during Cordis disposal", async () => {
 
   const session = topLevelSession();
   ctx.emit("session/event", session, event("turn/start", 0, { turn: 1 }));
-  const retrieving = ctx.waterfall("agent/pre-step", {
+  const recordingStart = ctx.waterfall("agent/pre-step", {
     agent: { id: session.id, session },
     turn: 1,
     step: 1,
@@ -1015,10 +1015,10 @@ test("aborts in-flight retrieval during Cordis disposal", async () => {
     }],
   }));
 
-  const retrievalSignal = await started.promise;
+  const turnStartSignal = await started.promise;
   await ctx.dispose();
-  assert.equal(retrievalSignal.aborted, true);
-  assert.equal((await retrieving).messages.length, 1);
+  assert.equal(turnStartSignal.aborted, true);
+  assert.equal((await recordingStart).messages.length, 1);
 });
 
 function pluginDependencies(overrides = {}) {

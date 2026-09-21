@@ -64,7 +64,14 @@ async function until(predicate) {
 }
 
 test("Cursor first turn reads DB QA without transcript or starting content, once across restart", async () => {
-  const f = await fixture(); const first = runtime(f); let second;
+  const f = await fixture();
+  const quotaCalls = [];
+  const pendingQuotaNotice = {
+    queue() {},
+    async claim() { quotaCalls.push("claim"); return "Pending Add quota notice."; },
+    close() { quotaCalls.push("close"); },
+  };
+  const first = runtime(f, { pendingQuotaNotice }); let second;
   try {
     assert.equal((await first.instance.recordTurnStart(f.start)).recorded, true);
     await f.append();
@@ -79,9 +86,10 @@ test("Cursor first turn reads DB QA without transcript or starting content, once
     assert.equal(persisted.active.metadata, undefined);
     for (const text of [prompt, answer, "synthetic-secret"]) assert.equal(JSON.stringify(persisted).includes(text), false);
     if (process.platform !== "win32") assert.equal((await stat(cursorTurnStatePath(f.home, f.sessionId))).mode & 0o777, 0o600);
-    first.instance.close(); second = runtime(f);
+    first.instance.close(); second = runtime(f, { pendingQuotaNotice });
     assert.equal((await second.instance.writeback(stop(f.start))).reason, "already_accepted_locally");
     assert.equal(second.writes.length, 0);
+    assert.deepEqual(quotaCalls, [], "Cursor must leave Add notices for clients that can display them");
   } finally { first.instance.close(); second?.instance.close(); await f.cleanup(); }
 });
 

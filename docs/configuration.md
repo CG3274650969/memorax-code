@@ -46,9 +46,9 @@ are not a compatibility contract.
 ## New configuration
 
 The generated template selects the existing client integrations, including the
-optional CodeBuddy/WorkBuddy, Trae, and Cursor adapters, disables automatic retrieval,
-enables automatic writeback, sets the preferred language to Chinese (`zh`),
-uses a five-turn skill reminder and the adaptive repository-update policy, and
+optional CodeBuddy/WorkBuddy, Trae, and Cursor adapters, enables automatic
+writeback, sets the preferred language to Chinese (`zh`), uses a five-turn skill
+reminder and the adaptive repository-update policy, and
 enables content-bearing local traces for every supported client. Foreground
 setup may narrow `[clients]` to clients detected on the host. The tables below
 list all fallbacks, including tuning fields omitted from the generated file.
@@ -552,9 +552,6 @@ A separate local manual-compaction probe verified native root replacement and
 archiving, but did not verify model receipt after compaction. The restoration
 integration is covered by synthetic tests, not a complete real-client end-to-end
 validation.
-Automatic prompt retrieval remains disabled for Cursor even when
-`[memory.retrieval].enabled` is true. Search remains available through the Skill
-and CLI.
 
 Automatic Add reads only native database user messages and public assistant steps.
 A normal or edited prompt needs an exact native request ID and matching prompt
@@ -590,7 +587,6 @@ endpoint = "https://platform.memorax.net"
 user_id = "your-username"
 api_key = "your-api-key"
 # timeout_ms = 5000
-# startup_timeout_ms = 3000
 ```
 
 | Field | Environment override | Fallback |
@@ -599,7 +595,6 @@ api_key = "your-api-key"
 | `user_id` | `MEMORAX_CODE_MEMORAX_USER_ID` | required username |
 | `api_key` | `MEMORAX_CODE_MEMORAX_API_KEY` | required; setup writes it |
 | `timeout_ms` | `MEMORAX_CODE_MEMORAX_TIMEOUT_MS` | `5000` ms |
-| `startup_timeout_ms` | `MEMORAX_CODE_MEMORAX_STARTUP_TIMEOUT_MS` | `3000` ms |
 
 MemoraX requests send the API key and the query or content required by the
 selected memory operation to the HTTPS endpoint. Override `endpoint` only with
@@ -610,9 +605,6 @@ notified level for memory write and memory search under the private runtime
 directory. They do not store a raw API key, Mark ID, or account-registration
 state. The returned quota limit is used only to decide whether to include
 conditional anonymous-account guidance.
-
-`startup_timeout_ms` controls synchronous automatic retrieval and is capped at
-10 seconds.
 
 ### Memory scope
 
@@ -648,12 +640,12 @@ name are not migrated, and Search does not also query those previous names.
 
 ## Retrieval
 
-Automatic prompt retrieval is disabled by default. The fields below belong in
-the `[memory.retrieval]` TOML table.
+Search is available through the shared Skill or direct `memorax-cli search`.
+Hooks do not issue Search requests. The fields below belong in the
+`[memory.retrieval]` TOML table and control explicit Search.
 
 | Field | Environment override | Fallback |
 | --- | --- | --- |
-| `enabled` | `MEMORAX_CODE_MEMORY_RETRIEVAL_ENABLED` | `false` |
 | `top_k` | `MEMORAX_CODE_MEMORAX_TOP_K` | `6` |
 | `k_dense` | `MEMORAX_CODE_MEMORAX_K_DENSE` | effective `top_k` |
 | `k_sparse` | `MEMORAX_CODE_MEMORAX_K_SPARSE` | effective `top_k`; `0` disables sparse |
@@ -664,12 +656,14 @@ the `[memory.retrieval]` TOML table.
 | `memory_type_order` | `MEMORAX_CODE_MEMORAX_MEMORY_TYPE_ORDER` | `core,episodic,semantic,procedural,unclassified` |
 
 The TOML form of `memory_type_order` is an array of strings; the environment
-form is comma-separated. `enabled` controls automatic prompt retrieval only.
-Explicit `memorax-cli search` remains available when
-credentials and a trusted workspace scope resolve.
-Cursor does not perform automatic prompt retrieval; enabling this setting does
-not change that behavior. Its prompt Hook context is used for local reminders
-and personal memory.
+form is comma-separated. Explicit Search requires credentials and a trusted
+workspace scope. Hook delivery of local personal memory, Repo Memory guidance,
+and Skill reminders remains available independently of Search.
+
+The removed `[memory.retrieval].enabled` and `[memorax].startup_timeout_ms`
+fields, and their former `MEMORAX_CODE_MEMORY_RETRIEVAL_ENABLED` and
+`MEMORAX_CODE_MEMORAX_STARTUP_TIMEOUT_MS` environment overrides, are ignored.
+They cannot enable Hook Search or change the timeout for explicit Search.
 
 ## Writeback and explicit add
 

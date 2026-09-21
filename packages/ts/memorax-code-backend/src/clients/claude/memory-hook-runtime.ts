@@ -76,12 +76,10 @@ export function createClaudeMemoryHookRuntime(
   const now = options.now ?? (() => Date.now());
   const memory = createHarnessMemoryRuntime({
     client: CLAUDE_MEMORY_TURN_CLIENT,
-    retrievalSource: "claude_hook_retrieval",
     writebackSource: "claude_hook_writeback",
     diagnosticPrefix: "claude_memory_hook",
     traceFailureEvent: "claude_trace.write_failed",
     turnStartTraceSource: "claude-hook",
-    deduplicateRetrieval: true,
   }, options);
   const { turnCoordinator } = memory;
 

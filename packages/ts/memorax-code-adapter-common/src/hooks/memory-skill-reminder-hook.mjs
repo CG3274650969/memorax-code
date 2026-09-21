@@ -80,12 +80,11 @@ export async function evaluateMemorySkillReminder(options, input) {
         turnCount: sessionState?.turnCount,
       };
     });
-    if (update.duplicate) return undefined;
-    const { memoryReminderDue, supplementalReminderDue } = update;
-
-    const baseAdditionalContext = stringOption(options.baseAdditionalContext);
     const systemMessage = stringOption(options.systemMessage);
-    if (!baseAdditionalContext && !memoryReminderDue && !supplementalReminderDue && !systemMessage) return undefined;
+    // Backend notices are already claimed and must survive local reminder deduplication.
+    if (update.duplicate) return systemMessage ? { systemMessage } : undefined;
+    const { memoryReminderDue, supplementalReminderDue } = update;
+    if (!memoryReminderDue && !supplementalReminderDue && !systemMessage) return undefined;
     const cadenceReminderContext = memoryReminderDue
       ? await buildCadenceReminderContext(options, input)
       : undefined;
@@ -96,14 +95,13 @@ export async function evaluateMemorySkillReminder(options, input) {
       memoryReminderDue,
       supplementalReminderDue,
     }, cadenceReminderContext, personalMemoryContext));
-    const additionalContext = [baseAdditionalContext, reminderContext].filter(Boolean).join("\n\n");
     const triggers = [
       ...(memoryReminderDue ? ["cadence"] : []),
       ...(supplementalReminderDue ? ["post_compaction"] : []),
     ];
     return {
       ...(systemMessage ? { systemMessage } : {}),
-      ...(additionalContext ? { additionalContext } : {}),
+      ...(reminderContext ? { additionalContext: reminderContext } : {}),
       ...(reminderContext ? {
         reminder: {
           sessionId,

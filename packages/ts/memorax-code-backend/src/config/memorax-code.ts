@@ -26,11 +26,9 @@ export type MemoraxCodeConfig = Readonly<{
     api_key?: string;
     user_id?: string;
     timeout_ms?: number;
-    startup_timeout_ms?: number;
   }>;
   memory?: Readonly<{
     retrieval?: Readonly<{
-      enabled?: boolean;
       top_k?: number;
       k_dense?: number;
       k_sparse?: number;
@@ -162,10 +160,6 @@ export function renderDefaultMemoraxCodeConfig(): string {
     `# endpoint = "${MEMORAX_DEFAULT_BASE_URL}" # MemoraX service URL.`,
     '# api_key = "" # MemoraX API key used by the local Backend.',
     '# user_id = "" # MemoraX base user ID; requests derive a workspace-scoped namespace.',
-    "",
-    "# Automatic Hook retrieval is opt-in.",
-    "[memory.retrieval]",
-    "enabled = false # Auto-inject retrieved memories into supported client prompts.",
     "",
     "# Automatic writeback sends selected prompts and final answers to MemoraX.",
     "[memory.writeback]",
@@ -321,11 +315,9 @@ function normalizeMemoraxCodeConfig(value: unknown): MemoraxCodeConfig {
       api_key: stringField(memorax, "api_key"),
       user_id: stringField(memorax, "user_id"),
       timeout_ms: numberField(memorax, "timeout_ms"),
-      startup_timeout_ms: numberField(memorax, "startup_timeout_ms"),
     }),
     memory: prune({
       retrieval: prune({
-        enabled: booleanField(retrieval, "enabled"),
         top_k: numberField(retrieval, "top_k"),
         k_dense: numberField(retrieval, "k_dense"),
         k_sparse: numberField(retrieval, "k_sparse"),

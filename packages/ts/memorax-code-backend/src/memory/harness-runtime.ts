@@ -1,4 +1,3 @@
-import { retrieveAutomaticMemoryContext } from "./automatic-retrieval.js";
 import {
   createAutomaticMemoryWritebackRuntime,
   type AutomaticMemoryWritebackEnqueue,
@@ -12,7 +11,6 @@ import type {
   MemoryObservabilitySource,
 } from "./observability.js";
 import {
-  claimQuotaNotice,
   createPendingQuotaNoticeRuntime,
   type PendingQuotaNoticeRuntime,
   type QuotaNoticeClaimer,
@@ -54,30 +52,23 @@ export type HarnessMemoryRuntimeOptions = {
 
 export type HarnessMemoryDefinition = Readonly<{
   client: MemoryTurnClient;
-  retrievalSource: MemoryObservabilitySource;
   writebackSource: MemoryObservabilitySource;
   diagnosticPrefix: string;
   traceFailureEvent: string;
   turnStartTraceSource?: string;
-  deduplicateRetrieval: boolean;
-  // Some clients cannot deliver prompt-time Hook context to the model.
-  automaticRetrieval?: boolean;
   quotaNotices?: boolean;
 }>;
 
 export type HarnessTurnStart = Omit<MemoryTurnStart, "client" | "clientTurnId" | "repositoryMemory"> & Readonly<{
   // Uncorrelated start observations may update trace, but cannot register a
-  // writable Turn or trigger retrieval.
+  // writable Turn or claim quota notices.
   clientTurnId?: string;
   prompt: string;
   repositoryMemory?: ConfiguredRepositoryMemoryResult;
-  retrievalTraceContext?: TraceContext;
-  // Native event boundaries may distinguish retrieval attempts within one Turn.
-  retrievalKeySuffix?: string;
   // Replaces the default request when live prompt text is not trace authority.
   traceRequest?: Record<string, unknown>;
   diagnosticFields?: Record<string, unknown>;
-  // Publish the registered state synchronously, before trace or retrieval can
+  // Publish the registered state synchronously, before trace or quota notices can
   // yield to a concurrent completion.
   onTurnRegistered?: (turn: MemoryTurnState) => void;
 }>;
@@ -128,8 +119,6 @@ export function createHarnessMemoryRuntime(
   const repositoryMemorySession = options.repositoryMemorySession ?? createRepositoryMemorySessionRuntime({
     onScopeUpgrade: automaticWriteback?.discardForScopeUpgrade,
   });
-  const retrievalTurns = new Set<string>();
-  const retrievalTurnLimit = positiveInteger(options.maxEntries, 256);
 
   function resolveRepositoryMemory(input: { sessionId: string; cwd?: string; workspaceKind?: string; requireBoundScope?: boolean; restoreScope?: RepositoryMemorySessionRequest["restoreScope"] }) {
     return repositoryMemorySession.resolve({
@@ -160,9 +149,8 @@ export function createHarnessMemoryRuntime(
     resolveRepositoryMemory,
     async recordTurnStart(input: HarnessTurnStart): Promise<MemoryHookTurnStartResult> {
       validateTraceIdentity(definition.client, input, input.traceContext);
-      validateTraceIdentity(definition.client, input, input.retrievalTraceContext);
       const {
-        prompt, retrievalTraceContext, retrievalKeySuffix, traceRequest,
+        prompt, traceRequest,
         diagnosticFields, onTurnRegistered, repositoryMemory: resolvedMemory, ...turn
       } = input;
       const repositoryMemory = resolvedMemory ?? await resolveRepositoryMemory(input);
@@ -203,32 +191,12 @@ export function createHarnessMemoryRuntime(
         now: () => new Date(now()),
       }));
       const repoMemoryWorktree = resolvedRepoMemoryWorktree(repositoryMemory);
-      if (definition.automaticRetrieval === false || !turn.clientTurnId || (definition.deduplicateRetrieval && !claimRetrievalTurn(retrievalTurns, retrievalTurnLimit, {
-        sessionId: turn.sessionId,
-        clientTurnId: turn.clientTurnId,
-      }, retrievalKeySuffix))) {
-        return { ok: true, ...(repoMemoryWorktree ? { repoMemoryWorktree } : {}) };
-      }
-      const pendingUserNotice = repositoryMemory.ok
+      const userNotice = turn.clientTurnId && repositoryMemory.ok
         ? await pendingQuotaNotice?.claim(repositoryMemory.memory.config)
         : undefined;
-      const retrieval = await retrieveAutomaticMemoryContext({
-        diagnosticLogger: options.diagnosticLogger,
-        claimQuotaNotice: definition.quotaNotices === false ? undefined : options.claimQuotaNotice ?? claimQuotaNotice,
-        env: options.env ?? process.env,
-        fetchImpl: options.fetchImpl,
-        memoryObservability: options.memoryObservability,
-        memoryObservabilitySource: definition.retrievalSource,
-        query: prompt,
-        repositoryMemory,
-        sessionKey: turn.sessionId,
-        traceContext: retrievalTraceContext ?? turn.traceContext,
-      });
-      const userNotice = [pendingUserNotice, retrieval.userNotice].filter(Boolean).join("\n");
       return {
         ok: true,
         ...(repoMemoryWorktree ? { repoMemoryWorktree } : {}),
-        ...(retrieval.context ? { additionalContext: retrieval.context } : {}),
         ...(userNotice ? { userNotice } : {}),
       };
     },
@@ -259,7 +227,6 @@ export function createHarnessMemoryRuntime(
       return turnCoordinator.size(definition.client);
     },
     close() {
-      retrievalTurns.clear();
       if (!options.turnCoordinator) turnCoordinator.close();
       if (!options.repositoryMemorySession) repositoryMemorySession.close();
       automaticWriteback?.close?.();
@@ -282,24 +249,3 @@ function validateTraceIdentity(
   ) throw new Error("harness trace identity mismatch");
 }
 
-function claimRetrievalTurn(
-  turns: Set<string>,
-  limit: number,
-  turn: Pick<MemoryTurnStart, "sessionId" | "clientTurnId">,
-  suffix?: string,
-): boolean {
-  const key = JSON.stringify([turn.sessionId, turn.clientTurnId, suffix]);
-  if (turns.has(key)) return false;
-  turns.add(key);
-  while (turns.size > limit) {
-    const oldest = turns.values().next().value;
-    if (typeof oldest !== "string") break;
-    turns.delete(oldest);
-  }
-  return true;
-}
-
-function positiveInteger(value: unknown, fallback: number): number {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-}

@@ -13,7 +13,7 @@ const DEFAULT_WRITEBACK_DRAIN_TIMEOUT_MS = 4_000;
 const MAX_REMINDER_TRACE_TIMEOUT_MS = 1_000;
 const MAX_RESUME_RECONCILIATION_WAIT_MS = 12_000;
 
-/** Register DSH-native retrieval and durable Turn writeback listeners. */
+/** Register DSH-native Turn tracking and durable writeback listeners. */
 export function registerMemoraxCodePlugin(ctx, dependencies) {
   const assertEnabled = dependencies?.assertEnabled;
   const backendClient = dependencies?.backendClient;
@@ -65,7 +65,7 @@ export function registerMemoraxCodePlugin(ctx, dependencies) {
   const personalContexts = new WeakMap();
   const pendingContextMessages = new WeakMap();
   const writebackTails = new WeakMap();
-  const retrievalLifetime = new AbortController();
+  const turnStartLifetime = new AbortController();
   const resumeReconciliations = new WeakMap();
   const writebackLifetime = new AbortController();
   const pendingReminderTraces = new Set();
@@ -130,7 +130,7 @@ export function registerMemoraxCodePlugin(ctx, dependencies) {
       }
       sessionTurns.set(turn, {
         startSeq: event.seq,
-        retrievalAttempted: false,
+        turnStartAttempted: false,
         turnStartRecorded: false,
         closed: false,
       });
@@ -175,17 +175,17 @@ export function registerMemoraxCodePlugin(ctx, dependencies) {
     if (!cwd) return decision;
     if (!runtimeEnabled(assertEnabled, ctx, debug)) return decision;
 
-    const retrievalSignal = signal
-      ? AbortSignal.any([signal, retrievalLifetime.signal])
-      : retrievalLifetime.signal;
-    const recallContext = await collectRecallContext({
+    const turnStartSignal = signal
+      ? AbortSignal.any([signal, turnStartLifetime.signal])
+      : turnStartLifetime.signal;
+    await recordTurnStart({
       backendClient,
       ctx,
       debug,
       decision,
       scheduleRepoMemoryBuild,
       session: agent.session,
-      signal: retrievalSignal,
+      signal: turnStartSignal,
       step,
       turn,
       turns,
@@ -207,7 +207,7 @@ export function registerMemoraxCodePlugin(ctx, dependencies) {
       personalMemoryReminderContext,
       repoMemoryWorktree: turns.get(agent.session)?.get(turn)?.repoMemoryWorktree,
       session: agent.session,
-      signal: retrievalSignal,
+      signal: turnStartSignal,
       step,
       turn,
     });
@@ -215,10 +215,7 @@ export function registerMemoraxCodePlugin(ctx, dependencies) {
       personalContext?.discard();
       return decision;
     }
-    const context = [
-      recallContext,
-      personalContext?.context,
-    ].filter(Boolean).join("\n\n");
+    const context = personalContext?.context;
     if (!context) {
       personalContext?.commit();
       return decision;
@@ -254,7 +251,7 @@ export function registerMemoraxCodePlugin(ctx, dependencies) {
   if (typeof ctx.effect === "function") {
     ctx.effect(() => async () => {
       accepting = false;
-      retrievalLifetime.abort(new Error("memorax-code DSH plugin disposed"));
+      turnStartLifetime.abort(new Error("memorax-code DSH plugin disposed"));
       await Promise.all([
         waitForPending(pendingWritebacks, drainTimeoutMs),
         waitForPending(pendingReminderTraces, MAX_REMINDER_TRACE_TIMEOUT_MS),
@@ -303,23 +300,23 @@ function discardPendingContextMessages(pendingMessages, session, turn) {
   pending.personalContext.discard();
 }
 
-async function collectRecallContext(options) {
+async function recordTurnStart(options) {
   if (options.step !== 1) return undefined;
   const state = options.turns.get(options.session)?.get(options.turn);
   if (!state || state.invalid || state.closed) return undefined;
-  if (state.retrievalAttempted) {
+  if (state.turnStartAttempted) {
     try {
       await waitForAbortable(
-        state.retrievalPending,
+        state.turnStartPending,
         options.signal,
-        "DSH duplicate Turn retrieval wait aborted",
+        "DSH duplicate Turn start wait aborted",
       );
     } catch {
       // The pre-step boundary handles an aborted caller.
     }
     return undefined;
   }
-  state.retrievalAttempted = true;
+  state.turnStartAttempted = true;
   const prompt = userPrompt(options.decision.messages);
   if (!prompt) return undefined;
 
@@ -348,17 +345,16 @@ async function collectRecallContext(options) {
           debugFailure(options.ctx, options.debug, "Repo Memory scheduling", error);
         }
       }
-      return nonEmptyString(response?.additionalContext);
     } catch (error) {
-      debugFailure(options.ctx, options.debug, "retrieval", error);
+      debugFailure(options.ctx, options.debug, "Turn start", error);
       return undefined;
     }
   })();
-  state.retrievalPending = pending;
+  state.turnStartPending = pending;
   try {
     return await pending;
   } finally {
-    if (state.retrievalPending === pending) state.retrievalPending = undefined;
+    if (state.turnStartPending === pending) state.turnStartPending = undefined;
   }
 }
 

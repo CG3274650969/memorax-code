@@ -21,7 +21,7 @@ test("memory service delegates Cursor pre-compact without replacing the active u
   let requests = 0;
   const service = createMemoryService({ memoraxCodeHome: home,
     env: { MEMORAX_CODE_HOME: home, MEMORAX_CODE_DEBUG: "false",
-      MEMORAX_CODE_CURSOR_TRACE_ENABLED: "false", MEMORAX_CODE_MEMORY_RETRIEVAL_ENABLED: "false",
+      MEMORAX_CODE_CURSOR_TRACE_ENABLED: "false",
       MEMORAX_CODE_MEMORAX_ENDPOINT: "http://memorax.test", MEMORAX_CODE_MEMORAX_API_KEY: "synthetic-secret",
       MEMORAX_CODE_MEMORAX_USER_ID: "synthetic-user" },
     fetchImpl: async () => { requests += 1; throw new Error("compaction observation must stay local"); },
@@ -142,7 +142,6 @@ test("CodeBuddy and WorkBuddy isolate equal native IDs through service writeback
   const service = createMemoryService({
     env: {
       MEMORAX_CODE_HOME: home,
-      MEMORAX_CODE_MEMORY_RETRIEVAL_ENABLED: "false",
       MEMORAX_CODE_MEMORY_WRITEBACK_ENABLED: "true",
       MEMORAX_CODE_MEMORY_WRITEBACK_BUFFER_ENABLED: "false",
       MEMORAX_CODE_MEMORAX_ENDPOINT: "http://memorax.test",
@@ -222,7 +221,6 @@ test("memory service surfaces automatic Add quota on the next supported client t
       MEMORAX_CODE_CODEX_TRACE_ENABLED: "false",
       MEMORAX_CODE_CLAUDE_TRACE_ENABLED: "false",
       MEMORAX_CODE_CODEBUDDY_TRACE_ENABLED: "false",
-      MEMORAX_CODE_MEMORY_RETRIEVAL_ENABLED: "false",
       MEMORAX_CODE_MEMORY_WRITEBACK_ENABLED: "true",
       MEMORAX_CODE_MEMORY_WRITEBACK_BUFFER_ENABLED: "false",
       MEMORAX_CODE_MEMORAX_ENDPOINT: "http://memorax.test",
@@ -367,7 +365,6 @@ test("memory service discards fallback writeback when turn start upgrades the se
     env: {
       MEMORAX_CODE_HOME: memoraxCodeHome,
       MEMORAX_CODE_CODEX_TRACE_ENABLED: "false",
-      MEMORAX_CODE_MEMORY_RETRIEVAL_ENABLED: "false",
       MEMORAX_CODE_MEMORY_WRITEBACK_ENABLED: "true",
       MEMORAX_CODE_MEMORY_WRITEBACK_BUFFER_ENABLED: "true",
       MEMORAX_CODE_MEMORY_WRITEBACK_BUFFER_MAX_TURNS: "8",
@@ -533,7 +530,7 @@ test("memory service records confirmed completion failures without changing Hook
       const service = createMemoryService({
         memoraxCodeHome,
         env: { MEMORAX_CODE_HOME: memoraxCodeHome, MEMORAX_CODE_DEBUG: "false",
-          MEMORAX_CODE_CODEX_TRACE_ENABLED: "false", MEMORAX_CODE_MEMORY_RETRIEVAL_ENABLED: "false",
+          MEMORAX_CODE_CODEX_TRACE_ENABLED: "false",
           MEMORAX_CODE_MEMORY_WRITEBACK_ENABLED: String(!scenario.disabled),
           MEMORAX_CODE_MEMORY_WRITEBACK_BUFFER_ENABLED: "false",
           MEMORAX_CODE_MEMORAX_ENDPOINT: "http://memorax.test", MEMORAX_CODE_MEMORAX_API_KEY: "secret",

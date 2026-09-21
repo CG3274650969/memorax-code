@@ -169,9 +169,9 @@ Profile preferences on the first eligible turn and Procedure Memory on the
 configured reminder cadence. After a recorded compaction is verified against the
 native database, the next nonempty, registered prompt restores Profile and personal
 reminders; Procedure keeps its normal cadence. Missing evidence skips recovery,
-and restoration during the same continuing task is not guaranteed. Automatic
-prompt retrieval remains disabled. Repo Memory initial builds and policy-based
-maintenance use Cursor's native background subagent; no separate Cursor CLI or
+and restoration during the same continuing task is not guaranteed.
+Repo Memory initial builds and policy-based maintenance use Cursor's native
+background subagent; no separate Cursor CLI or
 CLI login is required. Cursor may request normal tool approvals. See
 [Cursor configuration](docs/configuration.md#cursor-integration-paths).
 
@@ -277,15 +277,16 @@ writing when the durable intent or target is unclear.
 | **Visible memory impact** | In Codex, Claude Code, CodeBuddy CLI, WorkBuddy, DeepSeek Harness, OpenCode, Trae, and Cursor, opens the final answer with a brief natural-language note when an explicit Coding Memory Search or a Repo, Procedure, or Profile Memory available to the current turn materially guided the task. |
 | **Background Repo Memory maintenance** | Automatically organizes repository structure, entry points, and history evidence in supported clients, then updates them according to policy to reduce repeated searching and summarization. Trae remains Skill-only; Cursor uses its native background subagent for initial builds and maintenance. |
 | **Active memory control** | Lets you search and add memory through the bundled MemoraX Code skill or the CLI. |
-| **Client integration** | Integrates with Codex, Claude Code, CodeBuddy CLI, WorkBuddy, DeepSeek Harness, OpenCode, Trae, and Cursor to trigger memory retrieval, reminders, and writeback. Automatic quota reminders are currently available in Codex, Claude Code, CodeBuddy CLI, WorkBuddy, OpenCode, and Trae. |
+| **Client integration** | Integrates with Codex, Claude Code, CodeBuddy CLI, WorkBuddy, DeepSeek Harness, OpenCode, Trae, and Cursor for Skill-driven Search, local reminders, and automatic writeback. Automatic quota reminders are currently available in Codex, Claude Code, CodeBuddy CLI, WorkBuddy, OpenCode, and Trae. |
 | **Local observability** | Uses content-controlled local trace and reconciliation records to inspect activity counts, retrieval, and writeback status. |
 
 ## Your Memory, Your Control
 
 MemoraX is required for cloud-backed memory. Completing setup activates
 MemoraX search/add and the generated configuration's automatic writeback;
-there is no second writeback confirmation. Automatic retrieval remains off
-until explicitly enabled.
+there is no second writeback confirmation. Search runs when the agent uses the
+Skill or you invoke the CLI. Hooks provide local memory context and reminders
+without issuing Search requests.
 
 Local trace capture is enabled by default for supported clients. Depending on
 client capabilities, retained traces under `MEMORAX_CODE_HOME` may contain

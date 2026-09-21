@@ -146,7 +146,6 @@ export type TurnStartCommand =
 
 export type MemoryHookTurnStartResult = Readonly<{
   ok: true;
-  additionalContext?: string;
   userNotice?: string;
   repoMemoryWorktree?: string;
 }>;

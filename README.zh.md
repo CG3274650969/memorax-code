@@ -146,7 +146,7 @@ Claude Code，setup 会保留 Cursor 的第三方集成开关。Search 和主动
 Prompt Hook 会在首个符合条件的轮次注入可信工作区中的 User Profile 偏好，并按配置的提醒周期
 注入 Procedure Memory。记录的压缩经原生数据库验证后，会在下一个非空且成功注册的 Prompt
 恢复 Profile 与个人记忆提醒；Procedure 仍遵循原有周期。缺少证据时跳过恢复，不保证在同一个
-持续执行的任务中立即恢复。自动 Prompt 检索仍保持关闭。Repo Memory 初建和按策略维护使用
+持续执行的任务中立即恢复。Repo Memory 初建和按策略维护使用
 Cursor 原生后台子 Agent，无需单独安装或登录 Cursor CLI；执行工具时仍遵循 Cursor 的正常授权。详见
 [Cursor 配置](docs/configuration.md#cursor-integration-paths)。
 
@@ -233,13 +233,14 @@ MemoraX Code 会先比较含义：语义相同的请求不重复写入；长期�
 | **记忆作用反馈** | 在 Codex、Claude Code、CodeBuddy CLI、WorkBuddy、DeepSeek Harness、OpenCode、Trae 和 Cursor 中，当本轮主动 Search 的 Coding Memory，或本轮读取、注入的 Repo、Procedure、Profile Memory 确实指导了任务时，Agent 会在最终回复开头用自然语言简要说明。 |
 | **Repo Memory 后台整理** | 在支持后台任务的客户端中整理仓库结构、代码入口和历史证据，并按策略自动更新，避免反复搜索和总结。Trae 仍仅支持 Skill；Cursor 使用原生后台子 Agent 完成初建和维护。 |
 | **主动记忆控制** | 使用内置的 MemoraX Code Skill 或 CLI，主动查找和添加记忆。 |
-| **客户端集成** | 与 Codex、Claude Code、CodeBuddy CLI、WorkBuddy、DeepSeek Harness、OpenCode、Trae 和 Cursor 集成，触发记忆检索、提醒和写入。目前 Codex、Claude Code、CodeBuddy CLI、WorkBuddy、OpenCode 和 Trae 支持自动额度提醒。 |
+| **客户端集成** | 与 Codex、Claude Code、CodeBuddy CLI、WorkBuddy、DeepSeek Harness、OpenCode、Trae 和 Cursor 集成，支持 Skill 主动 Search、本地提醒和自动写回。目前 Codex、Claude Code、CodeBuddy CLI、WorkBuddy、OpenCode 和 Trae 支持自动额度提醒。 |
 | **本地可观测性** | 通过受内容控制的本地 trace 和 reconciliation 记录查看活动统计、召回与写入状态。 |
 
 ## 你的记忆，由你控制
 
 云端记忆依赖 MemoraX。完成安装引导后，会启用 MemoraX 搜索/添加，以及生成配置中的自动写回；
-不会再出现第二次写回确认。自动召回默认保持关闭，需要显式启用。
+不会再出现第二次写回确认。Search 由 Agent 通过 Skill 主动调用，或由您直接运行 CLI；
+Hook 继续提供本地记忆上下文与提醒，不发起 Search 请求。
 
 受支持客户端的本地 trace 默认开启。根据客户端能力，`MEMORAX_CODE_HOME` 下保留的 trace
 可能包含用户指令、Agent 回复、召回的 Memory、提醒文本和本地路径。可通过

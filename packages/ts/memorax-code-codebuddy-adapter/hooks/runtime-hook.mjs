@@ -144,10 +144,7 @@ if (event === "SessionStart") {
       }, personalMemoryContextOptions),
     } : {}),
   }, { ...input, turnId, workspaceKind });
-  const context = [
-    stringValue(response?.additionalContext),
-    stringValue(reminderResult?.additionalContext),
-  ].filter(Boolean).join("\n\n");
+  const context = stringValue(reminderResult?.additionalContext);
   const systemMessage = stringValue(response?.userNotice);
   if (context || systemMessage) process.stdout.write(`${JSON.stringify({
     ...(systemMessage ? { systemMessage } : {}),
