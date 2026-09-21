@@ -214,7 +214,7 @@ test("package removal cleans up Cursor without requiring another client installa
       codexHome: join(home, "codex"), claudeHome: join(home, "claude"),
       dshHome: join(home, "dsh"), openCodeConfigDir: join(home, "opencode"),
       codeBuddyHome: join(home, "codebuddy"), workBuddyHome: join(home, "workbuddy"), traeHome: join(home, "trae"),
-      codexCommand: join(home, "missing-codex"), claudeCommand: join(home, "missing-claude"), dshCommand: join(home, "missing-dsh"),
+      codexCommand: join(home, process.platform === "win32" ? "missing-codex.exe" : "missing-codex"), claudeCommand: join(home, "missing-claude"), dshCommand: join(home, "missing-dsh"),
     });
     const report = await cleanup();
     assert.equal(report.ok, true);
