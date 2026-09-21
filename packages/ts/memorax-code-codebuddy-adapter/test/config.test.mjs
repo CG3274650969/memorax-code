@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs, { cp, mkdir, mkdtemp, readFile, realpath, rm, stat, utimes, writeFile } from "node:fs/promises";
@@ -23,6 +23,36 @@ import {
 import { codeBuddyHookCommand, codeBuddyUserPromptHookCommand } from "../src/hook-manifest.mjs";
 import { writeCodeBuddyRuntimeObservation } from "../src/runtime-observation.mjs";
 import { resolveHookCodeBuddyCommand } from "../../memorax-code-adapter-common/src/clients/codebuddy-command.mjs";
+
+const suiteHome = await mkdtemp(join(tmpdir(), "memorax-codebuddy-config-suite-"));
+const fallbackStateHome = join(suiteHome, "unexpected-default-state");
+const isolatedEnvironment = {
+  HOME: suiteHome,
+  USERPROFILE: suiteHome,
+  MEMORAX_CODE_HOME: fallbackStateHome,
+  CODEBUDDY_HOME: join(suiteHome, ".codebuddy"),
+  CODEBUDDY_CONFIG_DIR: "",
+  WORKBUDDY_HOME: join(suiteHome, ".workbuddy"),
+  WORKBUDDY_CONFIG_DIR: "",
+  CODEBUDDY_PLUGIN_ROOT: "",
+  MEMORAX_CODE_CODEBUDDY_COMMAND: "fixture-codebuddy",
+  MEMORAX_CODE_WORKBUDDY_COMMAND: "fixture-workbuddy",
+  CODEBUDDY_CLI_PATH: "",
+  WORKBUDDY_CODEBUDDY_PATH: "",
+};
+const originalEnvironment = { ...process.env };
+Object.assign(process.env, isolatedEnvironment);
+after(async () => {
+  try {
+    assert.equal(await exists(fallbackStateHome), false, "Every lifecycle fixture must supply its own MemoraX state home");
+  } finally {
+    for (const key of Object.keys(isolatedEnvironment)) {
+      if (originalEnvironment[key] === undefined) delete process.env[key];
+      else process.env[key] = originalEnvironment[key];
+    }
+    await rm(suiteHome, { recursive: true, force: true });
+  }
+});
 
 test("selects independent native homes and command overrides", () => {
   for (const [platform, home, pathJoin] of [[process.platform, join(tmpdir(), "buddy-discovery-home"), join], ["win32", "C:\\Users\\tester", win32.join]]) {
@@ -175,7 +205,7 @@ test("installs and removes an isolated CodeBuddy plugin registry entry", async (
   await writeFile(join(home, "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: {
     "user-plugin@user-marketplace": [{ scope: "user", installPath: "/user/plugin", enabled: true }],
   }}));
-  const enabled = await enableCodeBuddyAdapter({ codeBuddyHome: home, platform: "win32" });
+  const enabled = await enableCodeBuddyAdapter({ codeBuddyHome: home, memoraxCodeHome, platform: "win32" });
   assert.equal(enabled.ok, true);
   const enabledStatus = await readCodeBuddyAdapterStatus({
     codeBuddyHome: home,
@@ -239,13 +269,13 @@ test("installs and removes an isolated CodeBuddy plugin registry entry", async (
     oldManifest.hooks.UserPromptSubmit = [{ hooks: [{ type: "command", command: codeBuddyHookCommand(installedRoot, "win32") }] }];
     await writeFile(join(installedRoot, "hooks", "hooks.json"), JSON.stringify(oldManifest));
   }
-  await enableCodeBuddyAdapter({ codeBuddyHome: home, platform: "win32" });
+  await enableCodeBuddyAdapter({ codeBuddyHome: home, memoraxCodeHome, platform: "win32" });
   assert.deepEqual(JSON.parse(await readFile(codeBuddySettingsPath(home), "utf8")).hooks, settings.hooks);
   for (const installedRoot of [pluginRoot, codeBuddyInstallPath(home)]) {
     assert.equal(JSON.parse(await readFile(join(installedRoot, "hooks", "hooks.json"), "utf8")).hooks.UserPromptSubmit, undefined);
   }
-  await disableCodeBuddyAdapter({ codeBuddyHome: home });
-  const disabledStatus = await readCodeBuddyAdapterStatus({ codeBuddyHome: home, platform: "win32" });
+  await disableCodeBuddyAdapter({ codeBuddyHome: home, memoraxCodeHome });
+  const disabledStatus = await readCodeBuddyAdapterStatus({ codeBuddyHome: home, memoraxCodeHome, platform: "win32" });
   assert.equal(disabledStatus.enabled, false);
   assert.equal(disabledStatus.codebuddyHooks.ok, true);
   assert.equal(disabledStatus.marketplaceReady, true);
@@ -253,8 +283,8 @@ test("installs and removes an isolated CodeBuddy plugin registry entry", async (
   const disabledSettings = JSON.parse(await readFile(codeBuddySettingsPath(home), "utf8"));
   assert.equal(disabledSettings.enabledPlugins["memorax-code-codebuddy-adapter@memorax-code-local"], false);
   assert.deepEqual(disabledSettings.hooks, { SessionStart: userSessionStart, UserPromptSubmit: [userPromptGroup] });
-  await removeCodeBuddyPluginInstallation({ codeBuddyHome: home });
-  const removedStatus = await readCodeBuddyAdapterStatus({ codeBuddyHome: home });
+  await removeCodeBuddyPluginInstallation({ codeBuddyHome: home, memoraxCodeHome });
+  const removedStatus = await readCodeBuddyAdapterStatus({ codeBuddyHome: home, memoraxCodeHome });
   assert.equal(removedStatus.installed, false);
   assert.equal(removedStatus.enabled, false);
   assert.equal(removedStatus.codebuddySkills.ok, false);
@@ -546,10 +576,11 @@ test("status rejects stale plugin and global prompt Hook configurations", async 
 
 test("leaves an uninstalled home untouched and removes an orphaned managed global Hook", async () => {
   const home = await mkdtemp(join(tmpdir(), "memorax-codebuddy-empty-"));
-  const disabled = await disableCodeBuddyAdapter({ codeBuddyHome: home });
+  const memoraxCodeHome = join(home, "memorax-state");
+  const disabled = await disableCodeBuddyAdapter({ codeBuddyHome: home, memoraxCodeHome });
   assert.equal(disabled.installed, false);
   assert.equal(await exists(codeBuddySettingsPath(home)), false);
-  const removed = await removeCodeBuddyPluginInstallation({ codeBuddyHome: home });
+  const removed = await removeCodeBuddyPluginInstallation({ codeBuddyHome: home, memoraxCodeHome });
   assert.equal(removed.removed, false);
   assert.equal(await exists(join(home, "plugins", "installed_plugins.json")), false);
   const userGroup = { hooks: [{ type: "command", command: "echo user-prompt" }] };
@@ -557,15 +588,16 @@ test("leaves an uninstalled home untouched and removes an orphaned managed globa
     userGroup,
     { hooks: [{ type: "command", command: codeBuddyUserPromptHookCommand(join(home, "memorax-code-codebuddy-adapter")) }] },
   ] } }));
-  assert.equal((await removeCodeBuddyPluginInstallation({ codeBuddyHome: home })).removed, true);
+  assert.equal((await removeCodeBuddyPluginInstallation({ codeBuddyHome: home, memoraxCodeHome })).removed, true);
   assert.deepEqual(JSON.parse(await readFile(codeBuddySettingsPath(home), "utf8")).hooks.UserPromptSubmit, [userGroup]);
 });
 
 test("malformed CodeBuddy registry fails closed", async () => {
   const home = await mkdtemp(join(tmpdir(), "memorax-codebuddy-malformed-"));
+  const memoraxCodeHome = join(home, "memorax-state");
   await mkdir(join(home, "plugins"), { recursive: true });
   await writeFile(join(home, "plugins", "installed_plugins.json"), "not-json\n");
-  await assert.rejects(() => enableCodeBuddyAdapter({ codeBuddyHome: home }), (error) => {
+  await assert.rejects(() => enableCodeBuddyAdapter({ codeBuddyHome: home, memoraxCodeHome }), (error) => {
     assert.match(error.message, /JSON|Unexpected token/);
     assert.deepEqual(error.failure, { stage: "config-parse", errorCode: "CLIENT_CONFIG_PARSE_FAILED", failureReason: "invalid_configuration" });
     assert.equal(JSON.stringify(error.failure).includes(home), false);
@@ -574,11 +606,14 @@ test("malformed CodeBuddy registry fails closed", async () => {
   const otherHome = await mkdtemp(join(tmpdir(), "memorax-codebuddy-malformed-hooks-"));
   const settings = { hooks: { UserPromptSubmit: "malformed" } };
   await writeFile(codeBuddySettingsPath(otherHome), JSON.stringify(settings));
-  await assert.rejects(() => enableCodeBuddyAdapter({ codeBuddyHome: otherHome }), (error) => {
+  const otherMemoraxCodeHome = join(otherHome, "memorax-state");
+  await assert.rejects(() => enableCodeBuddyAdapter({ codeBuddyHome: otherHome, memoraxCodeHome: otherMemoraxCodeHome }), (error) => {
     assert.match(error.message, /invalid CodeBuddy UserPromptSubmit Hook settings/);
     assert.deepEqual(error.failure, { stage: "config-parse", errorCode: "CLIENT_CONFIG_PARSE_FAILED", failureReason: "invalid_configuration" });
     return true;
   });
+  assert.equal((await readManagedCodeBuddyTarget({ memoraxCodeHome })).codeBuddyHome, home);
+  assert.equal((await readManagedCodeBuddyTarget({ memoraxCodeHome: otherMemoraxCodeHome })).codeBuddyHome, otherHome);
   assert.deepEqual(JSON.parse(await readFile(codeBuddySettingsPath(otherHome), "utf8")), settings);
 });
 
@@ -601,6 +636,7 @@ test("failed installation retains its target while cleanup preserves a native ho
 
 test("recovers an abandoned legacy registry lock without losing user plugins", async () => {
   const home = await mkdtemp(join(tmpdir(), "memorax-codebuddy-stale-lock-"));
+  const memoraxCodeHome = join(home, "memorax-state");
   const pluginId = "memorax-code-codebuddy-adapter@memorax-code-local";
   const registryPath = join(home, "plugins", "installed_plugins.json");
   const lockPath = `${registryPath}.lock`;
@@ -619,7 +655,7 @@ test("recovers an abandoned legacy registry lock without losing user plugins", a
   const staleTime = new Date(Date.now() - 60_000);
   await utimes(lockPath, staleTime, staleTime);
 
-  const disabled = await disableCodeBuddyAdapter({ codeBuddyHome: home });
+  const disabled = await disableCodeBuddyAdapter({ codeBuddyHome: home, memoraxCodeHome });
 
   assert.equal(disabled.ok, true);
   const registry = JSON.parse(await readFile(registryPath, "utf8"));
