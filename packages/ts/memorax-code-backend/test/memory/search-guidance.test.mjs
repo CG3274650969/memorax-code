@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createMemorySearchGuidanceRuntime } from "../../dist/memory/search-guidance.js";
+import { parseTurnStartCommand } from "../../dist/memory/hook-command.js";
 import { JEV_MODEL } from "../../dist/provider/jev/adapter.js";
 
 const scope = {
@@ -56,6 +57,33 @@ test("search guidance rejects mismatched native references and a changed account
     ok: false, reason: "context_unavailable",
   });
   assert.equal(requests.length, 1);
+});
+
+test("guidance requires registered optional native references before evaluation or cached-result delivery", async (t) => {
+  for (const scenario of [
+    { field: "cwd", body: { client: "opencode", sessionId: "session", userMessageId: "turn", cwd: "/fixture/workspace" } },
+    { field: "workspaceKind", body: { client: "codex", sessionId: "session", turnId: "turn", workspaceKind: "projectless", transcriptPath: "/fixture/session.jsonl" } },
+    { field: "transcriptPath", body: { client: "cursor", sessionId: "11111111-1111-4111-8111-111111111111",
+      turnId: "22222222-2222-4222-8222-222222222222", workspaceKind: "projectless",
+      databasePath: "/fixture/cursor.db", transcriptPath: "/fixture/transcript.txt" } },
+  ]) {
+    await t.test(`${scenario.body.client}: omitted ${scenario.field}`, async (t) => {
+      const { runtime, requests } = await fixture(t);
+      const complete = parseTurnStartCommand({ version: 1, ...scenario.body, prompt: "Check the prior fix" });
+      assert.equal(complete.ok, true);
+      const incomplete = { ...complete.command };
+      delete incomplete[scenario.field];
+      const parsed = parseTurnStartCommand(incomplete);
+      assert.equal(parsed.ok, true, "the field is optional at ingress but was supplied at registration");
+      runtime.registerTurn({ ...complete.command, clientTurnId: complete.command.turnId ?? complete.command.userMessageId,
+        createdAt: 1, repositoryScope: scope }, complete.command.prompt);
+      assert.deepEqual(await runtime.evaluate(parsed.command), { ok: false, reason: "context_unavailable" });
+      assert.equal(requests.length, 0);
+      assert.equal((await runtime.evaluate(complete.command)).ok, true);
+      assert.deepEqual(await runtime.evaluate(parsed.command), { ok: false, reason: "context_unavailable" });
+      assert.equal(requests.length, 1, "incomplete requests cannot reuse a successful cached decision either");
+    });
+  }
 });
 
 test("concurrent and repeated guidance evaluations share one provider attempt, including failures", async (t) => {

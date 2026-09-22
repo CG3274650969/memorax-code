@@ -203,7 +203,10 @@ export function createMemoraxOpenCodePlugin(options = {}) {
             reminderInput,
             options,
           );
-          if (!pluginEnabled(options) || promptSignal.aborted) return;
+          if (!pluginEnabled(options) || promptSignal.aborted) {
+            reminderResult?.discard?.();
+            return;
+          }
           appendSystemContexts(output, reminderResult?.additionalContext);
           return;
         }
@@ -254,7 +257,10 @@ export function createMemoraxOpenCodePlugin(options = {}) {
           reminderInput,
           options,
         );
-        if (!pluginEnabled(options) || promptSignal.aborted) return;
+        if (!pluginEnabled(options) || promptSignal.aborted) {
+          reminderResult?.discard?.();
+          return;
+        }
         if (turnStartAccepted && reminderResult?.reminder) {
           track(
             recordReminder(options, reminderResult.reminder),

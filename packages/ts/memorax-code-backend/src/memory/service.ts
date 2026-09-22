@@ -76,6 +76,7 @@ export function createMemoryService(options: MemoryServiceOptions = {}): MemoryS
   const turnCoordinator = createMemoryTurnCoordinator({
     automaticWriteback: automaticWriteback.enqueue,
     onTurnMaterialized: searchGuidance.completeTurn,
+    onTurnDiscarded: searchGuidance.discardTurn,
     now: options.now,
     ttlMs: options.ttlMs,
     maxEntries: options.maxEntries,

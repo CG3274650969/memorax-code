@@ -1160,7 +1160,13 @@ authorize memory operations. The memory capability owns the client- and
 session-qualified context and evaluates each eligible distinct registered user
 Turn, independently of the Skill reminder cadence. Client adapters deduplicate
 repeated native Turn events. The memory capability also reuses each registered
-Turn's in-flight or completed judgment, including failures. Validated native completion feeds
+Turn's in-flight or completed judgment, including failures. Guidance requests
+must match both the presence and values of the registered native references.
+Explicit interruption or rollback notifies guidance even after writeback
+metadata expires, invalidating the matching context and any in-flight result.
+An invalidated Turn retains its replay protection; successful writeback
+consumption does not discard the completed pair needed by the next Turn.
+Validated native completion feeds
 the immediately preceding observed user/final-assistant pair before automatic Add enablement or
 enqueue acceptance; DSH exposes the final assistant message separately from
 its merged Add reply. This bounded context is in memory only, separate from
@@ -1177,6 +1183,10 @@ configuration, context, or provider failures fall back to the original Skill
 reminder cadence, without adding a reminder on other turns. The native agent
 executes Search, while Profile, Procedure, compaction restoration, and user
 notices retain their independent delivery rules.
+When an adapter reports cancellation before reminder delivery, the shared Hook
+retains pending cadence and initial personal-context delivery separately from
+its monotonic Turn count. A retry can claim that pending delivery without
+counting the same Turn again; a later eligible prompt can also deliver it.
 
 The runtime composition root owns bounded graceful shutdown. It closes HTTP
 intake, waits for active requests, and then drains the memory service and

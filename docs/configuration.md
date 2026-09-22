@@ -655,6 +655,9 @@ reminder. Profile Memory, Procedure Memory, compaction restoration, and user
 notices keep their independent delivery rules. Cursor also omits its generic
 session-start Skill-routing hint when the Backend confirms enabled Jev with a
 configured key; its subsequent prompts use the same decision flow.
+When an adapter reports cancellation before reminder delivery, pending cadence
+and first-turn personal context can be delivered on a retry or the next eligible
+prompt. Retrying the same Turn does not advance the reminder count again.
 
 ```toml
 [jev]
@@ -695,6 +698,10 @@ is reached, further new turns use only the current request. An interrupted or
 superseded turn is not replaced by an older completed pair. Without a matching registered current
 request, evaluation is skipped; the generic reminder is delivered only when
 its original cadence is due.
+Guidance requests must retain the registered native reference fields and their
+values. Explicit native interruption or rollback invalidates the matching
+guidance context, including an in-flight result, even when the separate
+writeback metadata has already expired.
 
 A valid response returns a successful Search or skip decision: a probability
 of at least 0.5 selects Search; a lower probability selects skip. There is no

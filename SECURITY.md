@@ -272,6 +272,10 @@ Add enablement; it is not read from
 retained trace and is not written to a new conversation-history file. Restart,
 eviction, or missing eligible prior content leaves current-request-only input.
 A missing registered current request prevents evaluation.
+Submitted native references must match the registered values and field
+presence. Explicit interruption or rollback invalidates the matching guidance
+context and any in-flight decision; a late start or completion for that
+invalidated Turn cannot reactivate its retained context.
 
 A valid Jev response produces a binary Search or skip recommendation from its
 probability. It cannot authorize session correlation, scope changes, completion,

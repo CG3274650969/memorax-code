@@ -115,6 +115,7 @@ export function createHarnessMemoryRuntime(
   const turnCoordinator = options.turnCoordinator ?? createMemoryTurnCoordinator({
     automaticWriteback: automaticWriteback!.enqueue,
     onTurnMaterialized: options.searchGuidance?.completeTurn,
+    onTurnDiscarded: options.searchGuidance?.discardTurn,
     now,
     ttlMs: options.ttlMs,
     maxEntries: options.maxEntries,

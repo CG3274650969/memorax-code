@@ -96,8 +96,14 @@ test("Jev guidance uses native prior final text without Add or trace and isolate
       cwd, transcriptPath, prompt: codexPrompt,
     };
     assert.equal((await post("/memory/turn-start", codex)).ok, true);
+    const incompleteCodex = { ...codex };
+    delete incompleteCodex.cwd;
+    assert.deepEqual(await post("/memory/search-guidance", incompleteCodex), { ok: false, reason: "context_unavailable" });
+    assert.equal(requests.length, 1, "omitting the registered cwd must not send cached conversation text");
     assert.equal((await post("/memory/search-guidance", codex)).ok, true);
     assert.deepEqual(requests[1].state, { current_prompt: codexPrompt });
+    assert.deepEqual(await post("/memory/search-guidance", incompleteCodex), { ok: false, reason: "context_unavailable" });
+    assert.equal(requests.length, 2, "cached decisions retain the same reference requirements");
 
     const third = { ...next, turn: 3, startSeq: next.startSeq + 11, prompt: "Start a different task." };
     assert.equal((await post("/memory/turn-start", third)).ok, true);

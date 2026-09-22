@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
+import { evaluateMemorySkillReminder } from "../../memorax-code-adapter-common/src/hooks/memory-skill-reminder-hook.mjs";
 import { createMemoraxOpenCodePlugin } from "../src/plugin.mjs";
 import { OPENCODE_REPO_MEMORY_AGENT } from "../src/repo-memory-server-runner.mjs";
 
@@ -1150,6 +1151,84 @@ test("OpenCode cancellation during Jev never injects fallback or loses pending c
         assert.equal(state.sessions.cancelled.supplementalReminderPending, true);
       } finally {
         await hooks.dispose();
+        await rm(memoraxCodeHome, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("OpenCode disposal retains undelivered cadence and Profile across plugin recreation", async (t) => {
+  for (const scenario of [
+    { cancelledTurn: 1, resumedTurn: 1, phase: "guidance", decision: "skip" },
+    { cancelledTurn: 1, resumedTurn: 2, phase: "after helper", decision: "unavailable" },
+    { cancelledTurn: 6, resumedTurn: 6, phase: "after helper", decision: "skip" },
+    { cancelledTurn: 6, resumedTurn: 7, phase: "guidance", decision: "unavailable" },
+  ]) {
+    await t.test(JSON.stringify(scenario), async () => {
+      const memoraxCodeHome = await mkdtemp(join(tmpdir(), "memorax-opencode-reminder-recovery-"));
+      const guidanceRequests = [];
+      let cancelling = false;
+      let guidanceStarted;
+      const started = new Promise((resolve) => { guidanceStarted = resolve; });
+      let hooks;
+      const createHooks = () => createMemoraxOpenCodePlugin({
+        memoraxCodeHome, backendConnection: { url: "http://127.0.0.1:8787" },
+        memorySkillReminderEvaluator: async (options, input) => {
+          const result = await evaluateMemorySkillReminder({
+            ...options,
+            buildPersonalMemoryContext: async () => "Fixture Profile context.",
+            buildCadenceReminderContext: async () => "Fixture Procedure context.",
+          }, input);
+          if (cancelling && scenario.phase === "after helper") await hooks.dispose();
+          return result;
+        },
+        fetchImpl: async (url, request) => {
+          const path = new URL(url).pathname;
+          if (path !== "/memory/search-guidance") return Response.json({ ok: true });
+          guidanceRequests.push(JSON.parse(request.body).userMessageId);
+          if (cancelling && scenario.phase === "guidance") {
+            return new Promise((resolve, reject) => {
+              request.signal.addEventListener("abort", () => reject(request.signal.reason), { once: true });
+              guidanceStarted();
+            });
+          }
+          return Response.json(scenario.decision === "skip"
+            ? { ok: true, decision: "skip" } : { ok: false, reason: "timeout" });
+        },
+      })(pluginInput());
+      const submit = async (turn) => {
+        const output = promptOutput(`prompt-${turn}`, "Current request", "Existing context");
+        await hooks["chat.message"]({ sessionID: "recovery" }, output);
+        return output;
+      };
+      try {
+        hooks = await createHooks();
+        for (let turn = 1; turn < scenario.cancelledTurn; turn += 1) await submit(turn);
+        cancelling = true;
+        const pending = submit(scenario.cancelledTurn);
+        if (scenario.phase === "guidance") {
+          await started;
+          await hooks.dispose();
+        }
+        assert.equal((await pending).message.system, "Existing context");
+        cancelling = false;
+        hooks = await createHooks();
+        const resumed = await submit(scenario.resumedTurn);
+        assert.match(resumed.message.system, /Fixture Procedure context/);
+        if (scenario.cancelledTurn === 1) assert.match(resumed.message.system, /Fixture Profile context/);
+        else assert.doesNotMatch(resumed.message.system, /Fixture Profile context/);
+        if (scenario.decision === "skip") assert.doesNotMatch(resumed.message.system, /proactively invoke/);
+        else assert.match(resumed.message.system, /proactively invoke/);
+        const statePath = join(memoraxCodeHome, "adapters", "opencode", "memory-skill-reminders.json");
+        const state = JSON.parse(await readFile(statePath, "utf8")).sessions.recovery;
+        assert.equal(state.turnCount, scenario.resumedTurn);
+        const guidanceCount = guidanceRequests.length;
+        assert.equal((await submit(scenario.resumedTurn)).message.system, "Existing context");
+        assert.equal(guidanceRequests.length, guidanceCount, "a delivered retry remains deduplicated");
+        const next = await submit(scenario.resumedTurn + 1);
+        assert.doesNotMatch(next.message.system, /Fixture Profile context|Fixture Procedure context/);
+      } finally {
+        await hooks?.dispose();
         await rm(memoraxCodeHome, { recursive: true, force: true });
       }
     });

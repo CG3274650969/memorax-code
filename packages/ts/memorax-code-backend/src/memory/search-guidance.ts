@@ -84,6 +84,12 @@ export function createMemorySearchGuidanceRuntime(options: {
           ? { previousTurn: previous.completed } : {}),
       });
     },
+    discardTurn(input: MemoryTurnKey): void {
+      const key = sessionKey(input);
+      const current = turns.get(key);
+      if (!current || current.key.clientTurnId !== input.clientTurnId) return;
+      put(key, { key: current.key, invalid: true, retiredTurnIds: current.retiredTurnIds });
+    },
     completeTurn(input: MemoryMaterializedTurn): void {
       if (!configured().ok || !input.userText.trim() || !input.assistantText.trim()) return;
       const key = sessionKey(input.key);
@@ -163,5 +169,5 @@ function referencesMatchCommand(saved: NativeReferences | undefined, command: Tu
     databasePath: "databasePath" in command ? command.databasePath : undefined,
     eventStartSeq: "startSeq" in command ? command.startSeq : undefined,
   };
-  return Object.entries(references).every(([key, value]) => value === undefined || saved[key as keyof NativeReferences] === value);
+  return Object.entries(references).every(([key, value]) => saved[key as keyof NativeReferences] === value);
 }

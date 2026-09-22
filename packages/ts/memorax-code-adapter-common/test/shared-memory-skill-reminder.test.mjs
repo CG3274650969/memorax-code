@@ -226,3 +226,128 @@ test("Jev judges each unique prompt while fallback and personal context keep the
   assert.equal(profiles, 2, "only initial and post-compaction prompts load Profile context");
   assert.equal(procedures, 3, "Procedure context retains turns 1, 6, and 11");
 });
+
+test("cancelled reminder delivery retains cadence and initial Profile for a retry or later turn", async (t) => {
+  for (const scenario of [
+    { cancelledTurn: 1, resumedTurn: 1, decision: "skip" },
+    { cancelledTurn: 1, resumedTurn: 2, decision: "unavailable" },
+    { cancelledTurn: 6, resumedTurn: 6, decision: "unavailable" },
+    { cancelledTurn: 6, resumedTurn: 7, decision: "skip" },
+  ]) {
+    await t.test(JSON.stringify(scenario), async () => {
+      const root = await mkdtemp(join(tmpdir(), "memorax-reminder-cancel-"));
+      const statePath = join(root, "adapters", "shared-contract", "memory-skill-reminders.json");
+      const profiles = [];
+      const procedures = [];
+      const input = (turn) => ({ sessionId: "session", turnId: `turn-${turn}` });
+      const options = {
+        memoraxCodeHome: root, adapterDir: "shared-contract", runtime: "shared-contract",
+        additionalReminderContext: "Personal memory routing.",
+        buildPersonalMemoryContext: async ({ turnId }) => { profiles.push(turnId); return "Profile context."; },
+        buildCadenceReminderContext: async ({ turnId }) => { procedures.push(turnId); return "Procedure context."; },
+      };
+      try {
+        for (let turn = 1; turn < scenario.cancelledTurn; turn += 1) {
+          await evaluateMemorySkillReminder(options, input(turn));
+        }
+        const controller = new AbortController();
+        let guidanceStarted;
+        const started = new Promise((resolve) => { guidanceStarted = resolve; });
+        const pending = evaluateMemorySkillReminder({
+          ...options, signal: controller.signal,
+          evaluateSearchGuidance: () => new Promise((resolve, reject) => {
+            controller.signal.addEventListener("abort", () => reject(controller.signal.reason), { once: true });
+            guidanceStarted();
+          }),
+        }, input(scenario.cancelledTurn));
+        await started;
+        controller.abort();
+        assert.equal(await pending, undefined);
+
+        let evaluations = 0;
+        const resumedOptions = {
+          ...options, systemMessage: "Pending quota notice.",
+          evaluateSearchGuidance: async () => {
+            evaluations += 1;
+            return scenario.decision === "skip" ? { ok: true, decision: "skip" } : undefined;
+          },
+        };
+        const result = await evaluateMemorySkillReminder(resumedOptions, input(scenario.resumedTurn));
+        assert.equal(result.systemMessage, "Pending quota notice.");
+        assert.match(result.additionalContext, /Procedure context/);
+        if (scenario.cancelledTurn === 1) assert.match(result.additionalContext, /Profile context/);
+        else assert.doesNotMatch(result.additionalContext, /Profile context/);
+        if (scenario.decision === "skip") assert.doesNotMatch(result.additionalContext, /proactively invoke/);
+        else assert.match(result.additionalContext, /proactively invoke/);
+        assert.deepEqual(await evaluateMemorySkillReminder(resumedOptions, input(scenario.resumedTurn)), {
+          systemMessage: "Pending quota notice.",
+        });
+        assert.equal(evaluations, 1, "delivered retries retain ordinary guidance deduplication");
+        assert.equal(profiles.length, 1, "initial Profile is delivered once");
+        assert.equal(procedures.length, scenario.cancelledTurn === 1 ? 1 : 2);
+        const state = JSON.parse(await readFile(statePath, "utf8")).sessions.session;
+        assert.equal(state.turnCount, scenario.resumedTurn, "same-turn retries do not count as another turn");
+        assert.equal(state.lastTurnId, `turn-${scenario.resumedTurn}`);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("cancelled cadence restoration preserves a newer turn and independent compaction state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "memorax-reminder-cancel-concurrent-"));
+  const options = {
+    memoraxCodeHome: root, adapterDir: "shared-contract", runtime: "shared-contract",
+    supplementalReminderAfterCompact: true,
+    additionalReminderContext: "Personal memory routing.",
+    buildPersonalMemoryContext: async () => "Profile context.",
+    buildCadenceReminderContext: async () => "Procedure context.",
+  };
+  const input = (turn) => ({ sessionId: "session", turnId: `turn-${turn}` });
+  try {
+    for (let turn = 1; turn <= 5; turn += 1) await evaluateMemorySkillReminder(options, input(turn));
+    const controller = new AbortController();
+    let guidanceStarted;
+    const started = new Promise((resolve) => { guidanceStarted = resolve; });
+    const pending = evaluateMemorySkillReminder({
+      ...options, signal: controller.signal,
+      evaluateSearchGuidance: () => new Promise((resolve, reject) => {
+        controller.signal.addEventListener("abort", () => reject(controller.signal.reason), { once: true });
+        guidanceStarted();
+      }),
+    }, input(6));
+    await started;
+    assert.equal(await evaluateMemorySkillReminder(options, input(7)), undefined);
+    markSupplementalReminderForSession(options, "session");
+    controller.abort();
+    assert.equal(await pending, undefined);
+    const statePath = join(root, "adapters", "shared-contract", "memory-skill-reminders.json");
+    const state = JSON.parse(await readFile(statePath, "utf8")).sessions.session;
+    assert.equal(state.turnCount, 7);
+    assert.equal(state.lastTurnId, "turn-7");
+    assert.equal(state.supplementalReminderPending, true);
+    let finishRetry;
+    let retryStarted;
+    const recovering = new Promise((resolve) => { retryStarted = resolve; });
+    const recovery = evaluateMemorySkillReminder({
+      ...options,
+      evaluateSearchGuidance: () => new Promise((resolve) => {
+        finishRetry = resolve;
+        retryStarted();
+      }),
+    }, input(7));
+    await recovering;
+    markSupplementalReminderForSession(options, "session");
+    finishRetry(undefined);
+    const retry = await recovery;
+    assert.match(retry.additionalContext, /Procedure context/);
+    assert.match(retry.additionalContext, /Profile context/);
+    assert.deepEqual(retry.reminder.triggers, ["cadence", "post_compaction"]);
+    const recovered = JSON.parse(await readFile(statePath, "utf8")).sessions.session;
+    assert.equal(recovered.turnCount, 7);
+    assert.equal(recovered.supplementalReminderPending, true, "a later compaction event survives delivery");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

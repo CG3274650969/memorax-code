@@ -80,6 +80,7 @@ export type MemoryTurnDiscardReason = "interrupted" | "rolled_back";
 export type MemoryTurnCoordinatorOptions = {
   automaticWriteback: AutomaticMemoryWritebackEnqueue;
   onTurnMaterialized?: (turn: MemoryMaterializedTurn) => void;
+  onTurnDiscarded?: (key: MemoryTurnKey, reason: MemoryTurnDiscardReason) => void;
   now?: () => number;
   ttlMs?: number;
   maxEntries?: number;
@@ -157,8 +158,15 @@ export function createMemoryTurnCoordinator(options: MemoryTurnCoordinatorOption
     discardTurn(key, reason) {
       switch (reason) {
         case "interrupted":
-        case "rolled_back":
-          return turns.delete(turnKey(key));
+        case "rolled_back": {
+          const discarded = turns.delete(turnKey(key));
+          try {
+            options.onTurnDiscarded?.(key, reason);
+          } catch {
+            // Optional search guidance cannot change explicit metadata discard.
+          }
+          return discarded;
+        }
       }
     },
     async completeMaterializedTurn(input) {
