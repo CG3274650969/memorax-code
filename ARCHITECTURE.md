@@ -29,7 +29,10 @@ MemoraX Code integrates Codex, Claude Code, DeepSeek Harness (DSH), OpenCode,
 CodeBuddy CLI, WorkBuddy, Trae, and Cursor with one local Backend. The Backend is a
 capability-oriented modular monolith. The clients retain ownership of models,
 model-provider credentials, native tools, model-provider traffic, and native
-transcript, message, or Hook-event creation.
+transcript, message, or Hook-event creation. The Backend has one explicit
+exception: an opt-in Jev provider evaluates bounded semantic questions using
+a separate credential. It neither executes client tasks nor proxies client
+model-provider traffic.
 
 Around the Backend are:
 
@@ -126,12 +129,13 @@ relationships; the arrow labels distinguish them. It is not an import graph.
 
 Adapters deploy native integrations, bridge client events to Backend commands,
 and present returned context and diagnostics. Backend client runtimes own the
-native interpretation used by memory workflows. Model execution and provider
-configuration remain client-owned.
+native interpretation used by memory workflows. Client task execution and
+client provider configuration remain client-owned. The optional Jev adapter
+owns only normalized semantic evaluation requests.
 
 | Component | Stable responsibility | Must not own |
 | --- | --- | --- |
-| [Backend](packages/ts/memorax-code-backend) | Local memory service, native content interpretation, repository scope, local memory helpers, trace, lifecycle, and update scheduling; see [capability ownership](#43-capability-ownership) | Model execution, client model-provider credentials, or native transcript creation |
+| [Backend](packages/ts/memorax-code-backend) | Local memory service, native content interpretation, repository scope, local memory helpers, trace, lifecycle, and update scheduling; see [capability ownership](#43-capability-ownership) | Client model execution, client model-provider credentials, or native transcript creation |
 | [adapter-common](packages/ts/memorax-code-adapter-common) | Shared connection, private records, safe deployment-failure projection and diagnostic storage primitives, credential storage, locks, Hook transport/generations, and local memory helpers | Backend composition, native content interpretation, MemoraX requests, or client plugin policy |
 | [Codex adapter](packages/ts/memorax-code-codex-adapter) | Codex plugin, Hooks, workspace observation, and the canonical shared Skill | Rollout interpretation or Backend writeback orchestration |
 | [Claude Code adapter](packages/ts/memorax-code-claude-adapter) | Claude plugin, Hooks, installer, and marketplace source | Transcript interpretation or Backend memory orchestration |
@@ -919,6 +923,7 @@ src/
   memory/
   personal-memory/
   provider/
+    jev/
     memorax/
   repo-memory/
   repository/
@@ -948,6 +953,7 @@ entrypoints and compatibility facades. It is not another implementation area.
 | `src/repo-memory` | Repo Memory preparation, local and provider facet collection, delta detection, and bundle validation | Prepares bundle directories and the repository ignore entry, collects raw evidence, and validates output; agents author durable Markdown memory |
 | `src/repository` | Read-only repository identity | Scope derivation does not execute Git or use synchronous filesystem reads |
 | `src/provider/memorax` | MemoraX config interpretation, Search/Add payloads, HTTP transport, and normalized results | Independent from server routing and plugin lifecycle |
+| `src/provider/jev` | Opt-in Jev configuration, bounded conversation text, semantic evaluation transport, binary Search/skip decisions, and distinct failure results | No native content acquisition, trace storage, session or scope authority, client model proxying, or Search execution |
 | `src/trace` | Client-qualified trace config/context/store, current-turn state, retention, and JSONL persistence | Trace core has no outbound-network authority |
 | `src/config` | Backend, MemoraX Code, and proxy environment/config interpretation | Configuration parsing stays independent of route composition |
 | `src/shared` | Narrow utilities such as JSONL append, record guards, debug logging, and Windows invocation | Not a dumping ground for business types or policy |
@@ -1075,7 +1081,8 @@ and
 
 | Concern | Authority | Derived or non-authoritative views |
 | --- | --- | --- |
-| Models, model-provider credentials, native tools, and model-provider traffic | The native client | Backend and adapters must not proxy or persist this authority |
+| Client models, model-provider credentials, native tools, and model-provider traffic | The native client | Backend and adapters must not proxy or persist this authority |
+| Jev semantic evaluation | Explicit Jev configuration and separate credential; caller-supplied normalized text | A probabilistic recommendation, never session, scope, completion, or permission authority |
 | Hook command identity | Versioned, client-qualified command plus validated required session/turn fields | Parsed HTTP request objects |
 | Automatic writeback content | The matching client and Turn's [native authority](#native-writeback-authority) | Hook or plugin text is not a fallback outside Trae's primary authority; trace, latest-Turn guesses, local database guesses, and another client's format are never fallbacks |
 | Workspace and repository identity | Read-only scope resolution; for a fixed Base User ID, the live session binding permits only a same-root degraded-direct-`.git` to verified-Git upgrade | Project labels and Hook `cwd` |
@@ -1142,6 +1149,14 @@ Backend-owned remote memory state is limited to MemoraX memories and Add tasks.
 The provider adapter is the network boundary for documented memory payloads;
 the Backend does not poll an Add task after its initial response.
 
+The Jev provider is a separate opt-in outbound boundary. It accepts only the
+current user request and an optional previous user/final-assistant pair, trims
+and bounds their original text without redaction, and sends them with fixed
+retrieval criteria.
+The provider does not read native history or diagnostic storage and cannot
+authorize memory operations. Its current integration provides configuration
+and evaluation only; no Hook or Skill-reminder workflow invokes it.
+
 The runtime composition root owns bounded graceful shutdown. It closes HTTP
 intake, waits for active requests, and then drains the memory service and
 observability within one deadline. It waits for already-started background
@@ -1177,7 +1192,7 @@ owns their private storage and bounded retention, while memory, lifecycle, Hook,
 and npm composition supply only safe, content-free fields.
 These records have no session, scope, lifecycle, or memory authority. The storage
 primitive has no outbound-network authority, and its records never enter
-MemoraX payloads.
+MemoraX or Jev payloads.
 Storage failure preserves the original operation result. Explicit commands
 report that a diagnostic could not be saved; background Hooks remain silent. [Configuration](docs/configuration.md#default-searchadd-diagnostics)
 owns storage paths and retention values.
@@ -1201,7 +1216,9 @@ Raw native transcript files, transcript paths, and retained trace files stay
 local. Only normalized Search and Add requests cross the MemoraX
 provider boundary. An Add request may carry messages materialized from the
 exact native Turn, but it does not upload the raw file or unrelated transcript
-content. A production module that gains network capability must be explicitly
+content. Jev evaluation separately accepts only its documented normalized text
+input, never retained trace or diagnostic records. A production module that
+gains network capability must be explicitly
 reviewed by the local-only gate; trace-core modules must remain network-free,
 and a module must not combine trace storage with outbound authority without a
 reviewed contract.
@@ -1298,6 +1315,7 @@ paths are used below unless a different package or the repository root is named.
 | `src/repo-memory` | Repository-root `test/shared-skill/repo-memory-builder*.test.mjs` and `repo-memory-updater.test.mjs` through the canonical Skill launcher |
 | `src/personal-memory` | `test/personal-memory`; canonical Skill launcher integration in repository-root `test/shared-skill` |
 | `src/provider/memorax` | `test/provider/memorax` |
+| `src/provider/jev` | `test/provider/jev` |
 | `src/repository` | `test/repository` |
 | `src/shared` | `test/shared` |
 | `src/trace` | `test/trace` |
@@ -1363,7 +1381,7 @@ contracts without introducing a separate adapter test framework.
 | Client-native parsing or identity | `test/clients/<client>` | Source boundaries | Backend |
 | Client adapter plugin or Hook deployment | Matching adapter suite and affected Backend contract tests | Package shape when staged | Codex, Claude Code, DSH, OpenCode, CodeBuddy/WorkBuddy, Trae, or Cursor; add Adapter-common/shared Hook for shared Hook source and Install/artifacts for staged package shape |
 | Adapter-common | Direct common contracts and affected Backend, shared Skill, and adapter tests | Package shape when staged layout changes | Adapter-common/shared Hook; add Install/artifacts when staged runtime or package layout changes |
-| MemoraX provider, trace, or outbound transport | Matching Backend tests | Local-only trace boundary | Backend + Trace/local-only boundary |
+| MemoraX or Jev provider, trace, or outbound transport | Matching Backend tests | Local-only trace boundary | Backend + Trace/local-only boundary |
 | Test relocation | Moved owning suite | Platform-specific consumers | Matching named profile |
 | Packaging/materialization | npm package tests and artifact gates | Package shape and local-only trace boundary | Install/artifacts |
 | Cross-package architecture | All affected suites | Every affected executable contract | Broad cross-layer; add Install/artifacts when staging or layout changes |

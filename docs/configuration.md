@@ -8,7 +8,7 @@ $MEMORAX_CODE_HOME/config.toml
 
 `MEMORAX_CODE_HOME` defaults to `~/.memorax-code`. There is no separate
 configuration-path setting. Treat the whole file as private: it can contain a
-MemoraX API key and must not be committed or pasted into public issues.
+MemoraX or Jev API key and must not be committed or pasted into public issues.
 
 ## Precedence and reload behavior
 
@@ -637,6 +637,50 @@ memory is shared. Resolution never falls back to the bare base user ID.
 The change applies to subsequent writes and queries. Existing memories under
 `Codex-General`, WorkBuddy date-directory names, or OpenCode's `Default-Project`
 name are not migrated, and Search does not also query those previous names.
+
+## Jev provider configuration
+
+Jev is an optional hosted semantic-judgment provider from TypeSafe AI. The
+current integration supplies configuration and a bounded provider adapter;
+it does not yet replace Skill reminders or invoke Search. Enabling this
+configuration alone does not send conversation content or change reminders.
+
+```toml
+[jev]
+enabled = false
+api_key = ""
+```
+
+| Field | Environment override | Fallback |
+| --- | --- | --- |
+| `enabled` | `MEMORAX_CODE_JEV_ENABLED` | `false` |
+| `api_key` | `MEMORAX_CODE_JEV_API_KEY` | unset; required when enabled |
+
+An API key alone does not enable Jev. The environment switch accepts
+case-insensitive `true` or `false`; other values make the configuration
+invalid instead of falling through to a configured value. Missing keys and
+invalid configuration prevent requests. `memorax-code status` exposes only
+whether Jev is enabled and its configuration state, never the key. A ready
+configuration is not proof of successful remote authentication.
+
+The provider uses TypeSafe's fixed HTTPS endpoint and a pinned model version,
+with a Noul question about whether Coding Memory retrieval would help the
+current task. Its input consists of fixed retrieval guidance, the current
+user request, and an optional previous user request and final assistant
+reply. Each text field is trimmed and limited to 4,000 characters; the
+remaining original text is sent without content redaction. The external
+service's terms and data-handling policy govern the text it receives.
+Retained trace and diagnostic records are never input.
+
+A valid response returns a successful Search or skip decision: a probability
+of at least 0.5 selects Search; a lower probability selects skip. There is no
+intermediate decision band. Non-execution, invalid configuration or input,
+invalid responses, and request failures return a separate unsuccessful result
+with a fixed reason and no decision.
+A request has a two-second deadline including response reading and is not
+retried. Model, endpoint, threshold, and
+limits are implementation defaults, not additional user configuration. No
+separate runtime, CLI, or SDK installation is required.
 
 ## Retrieval
 

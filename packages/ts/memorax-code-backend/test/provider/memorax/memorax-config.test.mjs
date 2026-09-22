@@ -61,6 +61,9 @@ test("seeded MemoraX Code config exposes high-signal choices without a tuning ca
   assert.match(config, /# endpoint = "https:\/\/platform\.memorax\.net" # MemoraX service URL\./);
   assert.match(config, /# api_key = "" # MemoraX API key used by the local Backend\./);
   assert.match(config, /# user_id = "" # MemoraX base user ID; requests derive a workspace-scoped namespace\./);
+  assert.match(config, /\[jev\]\nenabled = false/);
+  assert.match(config, /api_key = "" # TypeSafe API key/);
+  assert.deepEqual(loadMemoraxCodeConfig(root).jev, { enabled: false });
   assert.doesNotMatch(config, /\[memory\.retrieval\]|Automatic Hook retrieval/);
   assert.match(config, /\[memory\.writeback\]/);
   assert.match(config, /enabled = true # Allow supported client sessions to write memories after replies\./);
@@ -187,6 +190,19 @@ test("config loaders reject an unfinished value ending in a comment without hang
 
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test("ordinary config loader never prints credential source from TOML parse failures", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "memorax-code-config-private-parse-error-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const configPath = join(root, "config.toml");
+  await writeFile(configPath, '[jev]\nenabled = true\napi_key = "fixture-private-key-must-not-appear\n');
+  const warnings = [];
+  t.mock.method(console, "warn", (message) => warnings.push(message));
+
+  assert.deepEqual(loadMemoraxCodeConfig(root), {});
+  assert.deepEqual(warnings, [`failed to parse MemoraX Code config ${configPath}`]);
+  assert.doesNotMatch(warnings.join("\n"), /fixture-private-key-must-not-appear|api_key/);
 });
 
 test("memory config status preserves Search tuning and ignores removed automatic Search settings", async () => {

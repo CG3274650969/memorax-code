@@ -59,6 +59,7 @@ import {
   summarizeAdapterReport,
 } from "../lifecycle/client-reports.js";
 import { backendEnv } from "../config/backend-env.js";
+import { jevConfigStatus } from "../provider/jev/config.js";
 import {
   backendServiceHome,
   BackendLifecycleLockError,
@@ -588,6 +589,15 @@ export function printMemoraxCodeStatus(report: MemoraxCodeStatusReport): void {
   if (backend.service) backendLog(`Backend service: ${backend.service}`);
   if (typeof backend.authRequired === "boolean") backendLog(`Client auth: ${backend.authRequired ? "required" : "not required"}`);
   printAdapterReports(report, true);
+  if (report.jev) {
+    const detail = {
+      disabled: "disabled",
+      missing_key: "enabled; API key missing",
+      configured: "configured (API key not validated)",
+      invalid_config: "invalid configuration; Jev calls disabled",
+    }[report.jev.state];
+    backendLog(`Jev configuration: ${detail}`);
+  }
   if (!suppressBackendGuidance()) {
     for (const line of statusGuidance(report)) backendLog(line);
   }
@@ -710,6 +720,7 @@ function backendConnectionStatusFailure(
   return {
     ok: false,
     action: "status",
+    jev: jevConfigStatus({ ...process.env, MEMORAX_CODE_HOME: backendServiceHome(serviceOptions) }),
     backend: {
       ok: false,
       url: state?.url ?? "",

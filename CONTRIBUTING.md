@@ -123,7 +123,8 @@ unset memorax_dev_root
 
 The Backend is a local memory and lifecycle service, not a model-provider
 proxy. Clients own models, provider credentials, tool execution, and native
-conversation data. Use the architecture's
+conversation data. The optional Jev provider is a narrow, separately configured
+semantic-evaluation boundary, not a client task runner. Use the architecture's
 [package ownership map](ARCHITECTURE.md#21-repository-components) to choose the
 owning package and its
 [capability map](ARCHITECTURE.md#43-capability-ownership) to place Backend
@@ -297,7 +298,7 @@ Native Windows package smoke coverage lives in
 script's prerequisites and isolation before using it; a macOS/Linux suite or
 WSL run does not replace native Windows validation.
 
-Real-client or MemoraX-backed checks are explicit opt-in tests. Report them
+Real-client, MemoraX-backed, or live Jev checks are explicit opt-in tests. Report them
 separately from synthetic tests, record platform and scenarios, redact output,
 and explain any relevant checks not run. Public fixtures must never contain
 real API keys, private transcripts, personal memory, or infrastructure

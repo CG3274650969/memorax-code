@@ -49,13 +49,29 @@ const rules = [
   },
   {
     name: "provider kernel stays independent from server and adapter lifecycle",
-    importers: ["provider/memorax/adapter.ts", "provider/memorax/http.ts"],
+    importers: ["provider/memorax/adapter.ts", "provider/memorax/http.ts", "provider/jev/adapter.ts"],
     forbidden: ["server-", "entrypoints/", "transport/http/", "clients/codex/plugin-install"],
   },
   {
-    name: "memorax config stays independent from server routing",
-    importers: ["config/memorax-code.ts", "provider/memorax/config.ts"],
+    name: "provider config stays independent from server routing",
+    importers: ["config/memorax-code.ts", "provider/memorax/config.ts", "provider/jev/config.ts"],
     forbidden: ["server-", "entrypoints/", "transport/http/"],
+  },
+  {
+    name: "Jev evaluates normalized input without native content, trace, filesystem, or lifecycle authority",
+    importers: ["provider/jev/adapter.ts"],
+    forbidden: [
+      "clients/",
+      "trace/",
+      "repository/",
+      "node:fs",
+      "node:fs/promises",
+      "node:child_process",
+      "app/",
+      "lifecycle/",
+      "memory/background-diagnostics",
+      "memory/cli-diagnostics",
+    ],
   },
   {
     name: "repository memory identity stays independent from child processes and synchronous filesystem I/O",
@@ -95,6 +111,7 @@ const rules = [
       "lifecycle/",
       "provider/memorax/adapter",
       "provider/memorax/http",
+      "provider/jev/adapter",
     ],
   },
   {
@@ -104,6 +121,7 @@ const rules = [
       "memory/harness-runtime.ts",
       ...clientMemoryRuntimes,
       "provider/memorax/adapter.ts",
+      "provider/jev/adapter.ts",
       "memory/turn-coordinator.ts",
       "memory/service.ts",
     ],

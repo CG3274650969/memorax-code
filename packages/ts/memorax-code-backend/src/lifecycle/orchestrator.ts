@@ -31,6 +31,7 @@ import {
   withBackendLifecycleLock,
 } from "./lock.js";
 import { seedMissingMemoraxCodeConfig } from "../provider/memorax/config.js";
+import { jevConfigStatus, type JevConfigStatus } from "../provider/jev/config.js";
 import { runProcessWithWindowsNpm } from "../shared/windows-cli-invocation.js";
 import { loadManagedClientsConfig, resolveManagedClients, type ManagedClients } from "./client-selection.js";
 import { clearActiveManagedClients, readActiveManagedClients, writeActiveManagedClients } from "./active-clients.js";
@@ -60,6 +61,7 @@ export type MemoraxCodeStatusReport = ClientAdapterReports & {
   action: "status";
   degraded?: true;
   backend: Awaited<ReturnType<typeof runBackendStatus>>;
+  jev?: JevConfigStatus;
 };
 
 export type MemoraxCodeLifecycleReport = ClientAdapterReports & {
@@ -114,6 +116,7 @@ export async function collectMemoraxCodeStatus(
   serviceOptions: BackendServiceOptions,
   argv: string[],
 ): Promise<MemoraxCodeStatusReport> {
+  const jev = jevConfigStatus({ ...process.env, MEMORAX_CODE_HOME: memoraxCodeHomeForService(serviceOptions) });
   const clients = await managedClientsFor(argv, serviceOptions, { preferActive: true });
   let serviceState;
   try {
@@ -122,6 +125,7 @@ export async function collectMemoraxCodeStatus(
     return {
       ok: false,
       action: "status",
+      jev,
       backend: {
         ok: false,
         url: backendUrl,
@@ -177,6 +181,7 @@ export async function collectMemoraxCodeStatus(
         || (client.id === "claude" && isOptionalUnconfiguredClaudeAdapter(report, codexAdapter))
         || (client.id === "dsh" && optionalDshUnavailable)),
     action: "status",
+    jev,
     ...(optionalDshUnavailable ? { degraded: true } : {}),
     backend,
     ...(codexAdapter ? { codexAdapter } : {}),
