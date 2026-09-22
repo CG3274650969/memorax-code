@@ -313,6 +313,13 @@ without a live Backend PID or when that state is disabled. Fresh or stopped
 installations without retained DSH state remain stopped. npm lifecycle never
 detects new clients, accepts credentials, or authorizes Hooks.
 
+`adapter-common` owns the Jev default block and the locked atomic configuration
+writer used by npm setup/update reconciliation and postinstall. Backfill adds
+only a missing root-level `jev` entry and preserves existing configuration.
+Postinstall backfills after package-transition handling; fresh npm installation
+does not create the state home or configuration. The configuration lock remains
+separate from package-transition authority and its lock.
+
 Explicit `memorax-code update --recover` reuses package-transition restoration
 and its lock for the already installed package. The user's recovery request
 permits an expired retired record; unattended npm restoration retains its

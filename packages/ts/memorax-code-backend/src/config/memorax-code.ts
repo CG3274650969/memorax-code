@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { parse } from "smol-toml";
 import { ensurePrivateConfigDirectory } from "../../../memorax-code-adapter-common/src/memorax-code-config-file.mjs";
+import { DEFAULT_JEV_CONFIG_TEXT } from "../../../memorax-code-adapter-common/src/jev-config-defaults.mjs";
 import {
   MEMORAX_DEFAULT_BASE_URL,
   MEMORAX_DEFAULT_MEMORY_OUTPUT_LANGUAGE,
@@ -165,10 +166,7 @@ export function renderDefaultMemoraxCodeConfig(): string {
     '# api_key = "" # MemoraX API key used by the local Backend.',
     '# user_id = "" # MemoraX base user ID; requests derive a workspace-scoped namespace.',
     "",
-    "# Optional Jev connection. Enabling allows bounded task context to be sent to TypeSafe.",
-    "[jev]",
-    "enabled = false # A configured API key does not enable Jev by itself.",
-    'api_key = "" # TypeSafe API key; never include it in shared diagnostics.',
+    DEFAULT_JEV_CONFIG_TEXT.trimEnd(),
     "",
     "# Automatic writeback sends selected prompts and final answers to MemoraX.",
     "[memory.writeback]",

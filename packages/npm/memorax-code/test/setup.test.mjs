@@ -6,6 +6,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
 import test from "node:test";
+import { parse } from "../../../ts/memorax-code-backend/node_modules/smol-toml/dist/index.js";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { commandOnPath } from "../lib/vscode-extension-command.mjs";
 
@@ -231,6 +232,7 @@ async function runSetup({ existingCache = false, explicitCache = false, codexReg
     "memorax-code-config-file.mjs",
     "hooks/hook-runtime-generation.mjs",
     "memorax-defaults.mjs",
+    "jev-config-defaults.mjs",
     "hooks/memory-skill-reminder-hook.mjs",
     "hooks/memory-skill-reminder-policy.mjs",
     "repo-memory/repo-memory-auto-build.mjs",
@@ -882,6 +884,10 @@ test("setup update mode skips MemoraX credentials and silently trusts verified H
     "codex = true",
     "claude = false",
     "",
+    "[jev]",
+    "enabled = true # User opt-in",
+    'api_key = "configured-jev-key"',
+    "",
     "[memorax]",
     'endpoint = "https://existing-memorax.example"',
     'api_key = "existing-api-key"',
@@ -922,6 +928,9 @@ test("setup update mode skips MemoraX credentials and silently trusts verified H
     assert.match(config, /output_language = "en"/);
     assert.match(config, /claude = false/);
     assert.match(config, /codebuddy = true/);
+    assert.equal(tomlSectionText(config, "jev"), tomlSectionText(existingConfig, "jev"));
+    assert.doesNotMatch(run.result.stderr, /configured-jev-key|existing-api-key/);
+    await assertSetupComplete(run);
   } finally {
     await rm(run.root, { recursive: true, force: true });
   }
@@ -1058,7 +1067,11 @@ test("setup reports discovered CodeBuddy runtime failures before changing client
       assert.doesNotMatch(run.result.stderr, new RegExp(`${label} runtime was not detected`));
       assert.doesNotMatch(run.result.stderr, /Setup completed successfully/);
       assert.doesNotMatch(run.log, /^memorax-code (?:start|stop|codex-plugin install)\b/m);
-      if (config) assert.equal(await readFile(join(run.memoraxCodeHome, "config.toml"), "utf8"), config);
+      if (config) {
+        const updated = await readFile(join(run.memoraxCodeHome, "config.toml"), "utf8");
+        assert.ok(updated.startsWith(config));
+        assert.deepEqual(parse(updated), { ...parse(config), jev: { enabled: false, api_key: "" } });
+      }
       await assertSetupIncomplete(run);
     } finally {
       await rm(run.root, { recursive: true, force: true });
@@ -1163,8 +1176,10 @@ test("setup seeds the default MemoraX Code config around trial memory preference
     assert.match(config, /capture_content = true # Store content in local CodeBuddy trace events\./);
     assert.match(config, /\[trace\.trae\]/);
     assert.match(config, /capture_content = true # Store content in local Trae trace events\./);
+    assert.deepEqual(parse(config).jev, { enabled: false, api_key: "" });
     assert.deepEqual(activeTomlSections(config), [
       "clients",
+      "jev",
       "memorax",
       "memory.add",
       "memory.repo_update",
@@ -1238,7 +1253,7 @@ test("setup detects memory preferences before writing MemoraX config", async () 
     );
     assert.match(
       config,
-      /user_id = "memorax-user" # Stable username; requests derive a workspace-scoped namespace\.\r?\napi_key = "sk_[A-Za-z0-9_-]+" # MemoraX API key used by the local Backend\.\r?\n\r?\n# Automatic writeback sends selected prompts and final answers to MemoraX\.\r?\n\[memory\.writeback\]/,
+      /user_id = "memorax-user" # Stable username; requests derive a workspace-scoped namespace\.\r?\napi_key = "sk_[A-Za-z0-9_-]+" # MemoraX API key used by the local Backend\.\r?\n/,
     );
     assert.doesNotMatch(config, /\[memory\.retrieval\]|Auto-inject retrieved memories|Automatic Hook retrieval/);
     assert.match(config, /\[memory\.skill_reminder\]/);
@@ -1399,7 +1414,7 @@ test("setup stops before client installation and Backend start when secure trial
     assert.match(run.log, /^trial-provision$/m);
     assert.doesNotMatch(run.log, /^memorax-code (?:codex-plugin install|start|status)/m);
     const config = await readFile(join(run.memoraxCodeHome, "config.toml"), "utf8");
-    assert.doesNotMatch(config, /^(?!\s*#)\s*(?:user_id|api_key)\s*=/m);
+    assert.doesNotMatch(tomlSectionText(config, "memorax"), /^(?!\s*#)\s*(?:user_id|api_key)\s*=/m);
     await assertSetupIncomplete(run);
   } finally {
     await rm(run.root, { recursive: true, force: true });
@@ -1458,10 +1473,9 @@ test("interactive setup after reinstall automatically reuses a complete MemoraX 
     assert.match(run.log, /^memorax-code codex-plugin activate --yes --json$/m);
     assert.match(run.result.stderr, /MemoraX memory: .*Configured/);
     assert.match(run.result.stderr, /Automatic writeback: Disabled by effective configuration/);
-    assert.equal(
-      await readFile(join(run.memoraxCodeHome, "config.toml"), "utf8"),
-      existingConfig,
-    );
+    const updated = await readFile(join(run.memoraxCodeHome, "config.toml"), "utf8");
+    assert.ok(updated.startsWith(existingConfig));
+    assert.deepEqual(parse(updated), { ...parse(existingConfig), jev: { enabled: false, api_key: "" } });
     await assertSetupComplete(run);
   } finally {
     await rm(run.root, { recursive: true, force: true });
@@ -1712,6 +1726,8 @@ test("automatic update setup is non-interactive and preserves disabled clients",
     assert.match(config, /codebuddy = false/);
     assert.match(config, /workbuddy = false/);
     assert.match(config, /trae = false/);
+    assert.deepEqual(parse(config).jev, { enabled: false, api_key: "" });
+    assert.equal(parse(config).memorax.api_key, "existing-api-key");
     await assertSetupComplete(run);
   } finally {
     await rm(run.root, { recursive: true, force: true });
@@ -1826,7 +1842,7 @@ test("automatic update setup leaves an unavailable unconfigured client undecided
     assert.equal(run.result.code, 0, run.result.stderr);
     assert.match(run.log, /^memorax-code start --clients codex --json$/m);
     const config = await readFile(join(run.memoraxCodeHome, "config.toml"), "utf8");
-    assert.equal(tomlSectionText(config, "clients"), tomlSectionText(existingConfig, "clients"));
+    assert.deepEqual(parse(config).clients, parse(existingConfig).clients);
     assert.doesNotMatch(tomlSectionText(config, "clients"), /codebuddy\s*=/);
     assert.doesNotMatch(tomlSectionText(config, "clients"), /trae\s*=/);
     await assertSetupComplete(run);

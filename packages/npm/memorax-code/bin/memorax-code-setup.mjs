@@ -8,8 +8,9 @@ import { fileURLToPath } from "node:url";
 import { parse } from "smol-toml";
 import {
   setTomlField,
-  updateConfigFileAtomically,
+  updateConfigFileWithLock,
 } from "../lib/memorax-code-adapter-common/src/memorax-code-config-file.mjs";
+import { DEFAULT_JEV_CONFIG_TEXT, appendMissingJevConfig } from "../lib/memorax-code-adapter-common/src/jev-config-defaults.mjs";
 import {
   MEMORAX_DEFAULT_BASE_URL,
   MEMORAX_DEFAULT_MEMORY_OUTPUT_LANGUAGE,
@@ -956,7 +957,7 @@ function readPersistedDshSelection() {
 
 function writeClientSelectionConfig(clients, configuredClients = SETUP_CLIENTS) {
   const path = memoraxCodeConfigPath();
-  return updateConfigFileAtomically({
+  return updateConfigFileWithLock({
     path,
     defaultText: setManagedClientSelection(defaultMemoraxCodeConfig(), clients, configuredClients),
     transform: (text) => setManagedClientSelection(text, clients, configuredClients),
@@ -1004,7 +1005,7 @@ function writeMemoraxConfig({ userId, endpoint, outputLanguage, apiKey }) {
       addFields,
     );
   };
-  return updateConfigFileAtomically({
+  return updateConfigFileWithLock({
     path,
     defaultText: applyFields(defaultMemoraxCodeConfig()),
     transform: applyFields,
@@ -1035,6 +1036,8 @@ function defaultMemoraxCodeConfig() {
     "[memorax]",
     `# endpoint = "${MEMORAX_DEFAULT_BASE_URL}" # MemoraX service URL.`,
     '# user_id = "" # Stable username; requests derive a workspace-scoped namespace.',
+    "",
+    DEFAULT_JEV_CONFIG_TEXT.trimEnd(),
     "",
     "# Automatic writeback sends selected prompts and final answers to MemoraX.",
     "[memory.writeback]",
@@ -1092,10 +1095,10 @@ function defaultMemoraxCodeConfig() {
 
 function seedMissingMemoraxCodeConfig() {
   const path = memoraxCodeConfigPath();
-  return updateConfigFileAtomically({
+  return updateConfigFileWithLock({
     path,
     defaultText: defaultMemoraxCodeConfig(),
-    transform: (text) => text,
+    transform: appendMissingJevConfig,
     parseToml: parse,
     warn: () => {},
     onFailure: (details) => setupFailure("config", { details }),
