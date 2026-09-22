@@ -640,10 +640,24 @@ name are not migrated, and Search does not also query those previous names.
 
 ## Jev provider configuration
 
-Jev is an optional hosted semantic-judgment provider from TypeSafe AI. The
-current integration supplies configuration and a bounded provider adapter;
-it does not yet replace Skill reminders or invoke Search. Enabling this
-configuration alone does not send conversation content or change reminders.
+Jev is an optional hosted semantic-judgment provider from TypeSafe AI. When
+enabled and configured with a key, it evaluates whether Coding Memory Search
+would help for each eligible distinct user request, independently of the Skill
+reminder cadence. Repeated native Turn events are deduplicated. A Search decision
+instructs the agent to read the installed `memorax-code` Skill's
+`references/memorax-search.md` in full, then follow its query and execution
+guidance, even when the generic Skill reminder is not due. A skip decision omits
+that retrieval reminder. The agent still constructs and executes Search.
+Disabled, unavailable, or failed Jev falls back to the original
+Skill reminder cadence: the first eligible turn, then every configured interval
+(five turns by default). A failure on another turn does not add a generic
+reminder. Profile Memory, Procedure Memory, compaction restoration, and user
+notices keep their independent delivery rules. Cursor also omits its generic
+session-start Skill-routing hint when the Backend confirms enabled Jev with a
+configured key; its subsequent prompts use the same decision flow.
+When an adapter reports cancellation before reminder delivery, pending cadence
+and first-turn personal context can be delivered on a retry or the next eligible
+prompt. Retrying the same Turn does not advance the reminder count again.
 
 ```toml
 [jev]
@@ -672,11 +686,29 @@ remaining original text is sent without content redaction. The external
 service's terms and data-handling policy govern the text it receives.
 Retained trace and diagnostic records are never input.
 
+The Backend retains bounded current-prompt context and the immediately
+preceding observed completed Turn only in memory, isolated by client, session,
+and repository scope. Previous content comes from validated native completion
+and remains available when automatic Add is disabled. It does not reconstruct
+older conversation history. It is not stored in the five-minute writeback
+metadata cache and is not persisted. A Backend restart or context eviction
+starts with the current request alone. Each cached session also retains up to
+256 retired Turn identities to reject recent replayed starts; once that bound
+is reached, further new turns use only the current request. An interrupted or
+superseded turn is not replaced by an older completed pair. Without a matching registered current
+request, evaluation is skipped; the generic reminder is delivered only when
+its original cadence is due.
+Guidance requests must retain the registered native reference fields and their
+values. Explicit native interruption or rollback invalidates the matching
+guidance context, including an in-flight result, even when the separate
+writeback metadata has already expired.
+
 A valid response returns a successful Search or skip decision: a probability
 of at least 0.5 selects Search; a lower probability selects skip. There is no
 intermediate decision band. Non-execution, invalid configuration or input,
 invalid responses, and request failures return a separate unsuccessful result
-with a fixed reason and no decision.
+with a fixed reason and no decision; the caller follows the original generic
+reminder cadence.
 A request has a two-second deadline including response reading and is not
 retried. Model, endpoint, threshold, and
 limits are implementation defaults, not additional user configuration. No

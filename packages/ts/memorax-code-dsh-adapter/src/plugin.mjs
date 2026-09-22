@@ -25,6 +25,8 @@ export function registerMemoraxCodePlugin(ctx, dependencies) {
   const memoryImpactContext = nonEmptyString(dependencies?.memoryImpactContext);
   const memoryReminderContext = nonEmptyString(dependencies?.memoryReminderContext);
   const personalMemoryReminderContext = nonEmptyString(dependencies?.personalMemoryReminderContext);
+  const searchGuidanceContext = nonEmptyString(dependencies?.searchGuidanceContext);
+  const reminderCadence = dependencies?.reminderCadence;
   const defer = dependencies?.defer ?? queueMicrotask;
   const debug = dependencies?.debug ?? process.env.MEMORAX_CODE_DSH_DEBUG === "1";
   const drainTimeoutMs = positiveInteger(
@@ -184,6 +186,7 @@ export function registerMemoraxCodePlugin(ctx, dependencies) {
       debug,
       decision,
       scheduleRepoMemoryBuild,
+      searchGuidanceContext,
       session: agent.session,
       signal: turnStartSignal,
       step,
@@ -205,6 +208,10 @@ export function registerMemoraxCodePlugin(ctx, dependencies) {
       memoryReminderContext,
       personalContexts,
       personalMemoryReminderContext,
+      searchGuidanceContext,
+      reminderCadence,
+      searchGuidance: step === 1 ? turns.get(agent.session)?.get(turn)?.searchGuidance : undefined,
+      turnStartCommand: turns.get(agent.session)?.get(turn)?.turnStartCommand,
       repoMemoryWorktree: turns.get(agent.session)?.get(turn)?.repoMemoryWorktree,
       session: agent.session,
       signal: turnStartSignal,
@@ -337,6 +344,7 @@ async function recordTurnStart(options) {
       const response = await options.backendClient.recordTurnStart(command, { signal: options.signal });
       if (options.signal?.aborted) return undefined;
       state.turnStartRecorded = true;
+      state.turnStartCommand = command;
       state.repoMemoryWorktree = nonEmptyString(response?.repoMemoryWorktree);
       if (state.repoMemoryWorktree && typeof options.scheduleRepoMemoryBuild === "function") {
         try {
@@ -344,6 +352,13 @@ async function recordTurnStart(options) {
         } catch (error) {
           debugFailure(options.ctx, options.debug, "Repo Memory scheduling", error);
         }
+      }
+      if (options.searchGuidanceContext
+        && typeof options.backendClient.evaluateSearchGuidance === "function") {
+        try {
+          const result = await options.backendClient.evaluateSearchGuidance(command, { signal: options.signal });
+          if (result?.ok === true && ["search", "skip"].includes(result.decision)) state.searchGuidance = result;
+        } catch { /* Guidance failure preserves the existing Skill reminder cadence. */ }
       }
     } catch (error) {
       debugFailure(options.ctx, options.debug, "Turn start", error);
@@ -366,6 +381,7 @@ async function collectPersonalContext(options) {
     options.intervalTurns,
     options.memoryReminderContext,
     options.personalMemoryReminderContext,
+    state.acceptedReminder ?? options.reminderCadence?.read(options.session.id),
   );
   const firstObservation = !state.observed;
   const compactionGeneration = projection.compactionGeneration;
@@ -375,7 +391,8 @@ async function collectPersonalContext(options) {
   const includeProfile = firstObservation
     || state.appliedCompactionGeneration < compactionGeneration;
   const includeProcedure = firstObservation || cadenceDue;
-  if (!includeProfile && !includeProcedure) return undefined;
+  const guidance = options.searchGuidance;
+  if (!includeProfile && !includeProcedure && !guidance) return undefined;
   if (state.lastAttempt?.turn === options.turn
     && state.lastAttempt?.compactionGeneration === compactionGeneration) return undefined;
   const attempt = { turn: options.turn, compactionGeneration };
@@ -384,7 +401,7 @@ async function collectPersonalContext(options) {
   let loaded = false;
   let profileContext;
   let procedureContext;
-  if (options.repoMemoryWorktree) {
+  if (options.repoMemoryWorktree && (includeProfile || includeProcedure)) {
     try {
       const result = await options.loadPersonalContext({
         cwd: options.repoMemoryWorktree,
@@ -400,25 +417,31 @@ async function collectPersonalContext(options) {
         state.lastAttempt = undefined;
       }
       debugFailure(options.ctx, options.debug, "personal context", error);
-      if (!cadenceDue && !postCompactionDue) return undefined;
+      if (!cadenceDue && !postCompactionDue && !guidance) return undefined;
     }
   }
   const triggers = [
     ...(cadenceDue ? ["cadence"] : []),
     ...(postCompactionDue ? ["post_compaction"] : []),
+    ...(guidance ? ["search_guidance"] : []),
   ];
   const reminderParts = [];
-  if (cadenceDue) reminderParts.push(options.memoryReminderContext);
-  if (postCompactionDue || (cadenceDue && firstObservation && profileContext)) {
+  if (guidance?.decision === "search") reminderParts.push(options.searchGuidanceContext);
+  else if (cadenceDue && !guidance) reminderParts.push(options.memoryReminderContext);
+  if (postCompactionDue || (cadenceDue && (guidance || (firstObservation && profileContext)))) {
     reminderParts.push(options.personalMemoryReminderContext);
   }
-  if (profileContext || procedureContext) reminderParts.push(options.memoryImpactContext);
+  if (profileContext || procedureContext || guidance?.decision === "search") reminderParts.push(options.memoryImpactContext);
   if (profileContext) reminderParts.push(profileContext);
   if (procedureContext) reminderParts.push(procedureContext);
   return {
     context: reminderParts.join("\n\n"),
     triggers,
     commit() {
+      if (cadenceDue && options.turnStartCommand) {
+        state.acceptedReminder = { startSeq: options.turnStartCommand.startSeq, turn: options.turnStartCommand.turn };
+        options.reminderCadence?.commit(options.session.id, state.acceptedReminder);
+      }
       if (loaded) {
         state.observed = true;
         if (includeProfile) state.appliedCompactionGeneration = compactionGeneration;
@@ -621,6 +644,7 @@ function reminderProjection(
   intervalTurns,
   memoryReminderContext,
   personalMemoryReminderContext,
+  acceptedReminder,
 ) {
   const events = ownedSessionEvents(session);
   if (!events) {
@@ -636,6 +660,10 @@ function reminderProjection(
   for (const event of events) {
     if (event?.type === "turn/start" && turnsSinceReminder !== undefined) {
       turnsSinceReminder += 1;
+    }
+    if (event?.type === "turn/start" && event.seq === acceptedReminder?.startSeq
+      && event.data?.turn === acceptedReminder.turn) {
+      turnsSinceReminder = 0;
     }
     if (isSuccessfulCompaction(event)) {
       compactionGeneration += 1;

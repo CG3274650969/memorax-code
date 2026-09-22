@@ -73,6 +73,7 @@ flowchart LR
   Build["scripts<br/>build, stage, materialize"]
   Artifact["assembled npm artifact<br/>installed CLI"]
   MemoraX["MemoraX memory API"]
+  Jev["Jev semantic evaluation API (opt-in)"]
   Local["local runtime state<br/>trace and lifecycle records"]
 
   Npm --> Build
@@ -117,6 +118,7 @@ flowchart LR
 
   Clients -->|"shared Skill via client shell"| MemoryCLI
   Service -->|"automatic Add"| MemoraX
+  Service -->|"each eligible user request judgment"| Jev
   MemoryCLI -->|"explicit Search/Add"| MemoraX
   Service --> Local
   MemoryCLI --> Local
@@ -947,7 +949,7 @@ entrypoints and compatibility facades. It is not another implementation area.
 | `src/lifecycle/client-reports.ts` | Static lifecycle client identity and pure projections of adapter readiness and diagnostic summaries | No native discovery, filesystem or process access, lifecycle mutations, or replacement of raw client reports |
 | `src/lifecycle/backend` | Managed process, PID/token/connection records, status probing, cleanup, and shutdown requests | Helper contracts do not depend back on the full service implementation |
 | `src/clients/<client>` | Native interpretation, correlation, interruption/recovery, trace adaptation, and lifecycle participation; delegates common memory workflows to the shared harness runtime | Request runtime stays HTTP-composition independent and uses only the matching [native authority](#native-writeback-authority); native deployment follows [package ownership](#22-physical-dependency-directions) |
-| `src/memory` | Memory commands, retrieval, writeback, turn coordination, repository session pinning, manual CLI, and buffering/chunking | Client-neutral modules do not parse native transcript formats |
+| `src/memory` | Memory commands, retrieval guidance, writeback, turn coordination, repository session pinning, manual CLI, and buffering/chunking | Client-neutral modules do not parse native transcript formats |
 | `src/memory/harness-runtime.ts` | Common Turn-start and materialized-completion workflows for all supported clients; publishes registered Turn state synchronously and owns locally created memory resources while reusing injected shared resources | No client implementation, HTTP, app/lifecycle, or direct provider-transport imports; diagnostics enter through a port and native interpretation stays with each client |
 | `src/personal-memory` | Local User Profile listing, normalization, duplicate detection, updates, deletion, and atomic storage | No Backend service, provider calls, transcript processing, or Procedure Memory mutation |
 | `src/repo-memory` | Repo Memory preparation, local and provider facet collection, delta detection, and bundle validation | Prepares bundle directories and the repository ignore entry, collects raw evidence, and validates output; agents author durable Markdown memory |
@@ -1154,8 +1156,39 @@ current user request and an optional previous user/final-assistant pair, trims
 and bounds their original text without redaction, and sends them with fixed
 retrieval criteria.
 The provider does not read native history or diagnostic storage and cannot
-authorize memory operations. Its current integration provides configuration
-and evaluation only; no Hook or Skill-reminder workflow invokes it.
+authorize memory operations. The memory capability owns the client- and
+session-qualified context and evaluates each eligible distinct registered user
+Turn, independently of the Skill reminder cadence. Client adapters deduplicate
+repeated native Turn events. The memory capability also reuses each registered
+Turn's in-flight or completed judgment, including failures. Guidance requests
+must match both the presence and values of the registered native references.
+Explicit interruption or rollback notifies guidance even after writeback
+metadata expires, invalidating the matching context and any in-flight result.
+Normal generation retirement invalidates unfinished guidance immediately while
+preserving already validated completed QA for the next Turn.
+An invalidated Turn retains its replay protection; successful writeback
+consumption does not discard the completed pair needed by the next Turn.
+Validated native completion feeds
+the immediately preceding observed user/final-assistant pair before automatic Add enablement or
+enqueue acceptance; DSH exposes the final assistant message separately from
+its merged Add reply. This bounded context is in memory only, separate from
+writeback metadata and trace. Scope changes invalidate it, and restart or
+eviction leaves the next registered request with current text only. Interrupted
+or superseded Turns do not select an older completed pair.
+
+A Search decision instructs the native agent to read the installed
+`memorax-code` Skill's `references/memorax-search.md` in full, then follow its
+query and execution guidance, even when the generic retrieval reminder is not
+due; skip suppresses that reminder. The canonical Skill reference owns query
+construction, execution, and result-handling rules. Disabled Jev and
+configuration, context, or provider failures fall back to the original Skill
+reminder cadence, without adding a reminder on other turns. The native agent
+executes Search, while Profile, Procedure, compaction restoration, and user
+notices retain their independent delivery rules.
+When an adapter reports cancellation before reminder delivery, the shared Hook
+retains pending cadence and initial personal-context delivery separately from
+its monotonic Turn count. A retry can claim that pending delivery without
+counting the same Turn again; a later eligible prompt can also deliver it.
 
 The runtime composition root owns bounded graceful shutdown. It closes HTTP
 intake, waits for active requests, and then drains the memory service and

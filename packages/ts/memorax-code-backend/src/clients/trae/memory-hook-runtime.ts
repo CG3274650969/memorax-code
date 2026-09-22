@@ -60,6 +60,7 @@ export function createTraeMemoryHookRuntime(
   }, options);
   const { turnCoordinator } = memory;
   const interruptedTurns = new Set<string>();
+  const completedTurns = new Set<string>();
   // Active snapshots outlive coordinator TTL to preserve long turns' interruption authority.
   const activeTurns = new Map<string, MemoryTurnState>();
   const turnStartOperations = new Map<string, Promise<MemoryHookTurnStartResult>>();
@@ -69,13 +70,14 @@ export function createTraeMemoryHookRuntime(
     async recordTurnStart(command) {
       turnCoordinator.pruneExpired();
       const commandKey = traeRuntimeTurnKey(command.sessionId, command.turnId);
-      if (interruptedTurns.has(commandKey)) return { ok: true };
+      if (interruptedTurns.has(commandKey) || completedTurns.has(commandKey)) return { ok: true };
       const previous = activeTurns.get(command.sessionId) ?? turnCoordinator.latestTurn({
         client: TRAE_MEMORY_TURN_CLIENT,
         sessionId: command.sessionId,
         excludeClientTurnId: command.turnId,
       });
-      if (previous && previous.clientTurnId !== command.turnId) {
+      if (previous && previous.clientTurnId !== command.turnId
+        && !completedTurns.has(traeRuntimeTurnKey(previous.sessionId, previous.clientTurnId))) {
         await interruptPreviousTurn(turnCoordinator, previous, options, now);
         rememberBounded(
           interruptedTurns,
@@ -141,6 +143,8 @@ export function createTraeMemoryHookRuntime(
         assistantTimestampSource: "observed",
         traceContext,
       });
+      // A validated Stop stays completed even when automatic Add retains metadata.
+      if (!interruptedTurns.has(commandKey)) rememberBounded(completedTurns, commandKey, runtimeTurnLimit);
       await recordMaterializedTurn(traceContext, command, options);
       // Clear only the captured snapshot; a newer turn may have registered
       // while this Stop was awaiting completion.
@@ -166,6 +170,7 @@ export function createTraeMemoryHookRuntime(
 
     close() {
       interruptedTurns.clear();
+      completedTurns.clear();
       activeTurns.clear();
       turnStartOperations.clear();
       memory.close();

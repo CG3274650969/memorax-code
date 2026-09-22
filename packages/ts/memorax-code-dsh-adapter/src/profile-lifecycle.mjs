@@ -91,6 +91,7 @@ const PROFILE_BUNDLE_FILES = Object.freeze([
   "src/backend-client.mjs",
   "src/dsh-message.mjs",
   "src/dsh-version.mjs",
+  "src/reminder-cadence.mjs",
   "src/http-client.mjs",
   "src/personal-context-worker.mjs",
   "src/personal-context.mjs",

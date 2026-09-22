@@ -18,6 +18,7 @@ const { isRepoMemoryJobWorker } = await import(pathToFileURL(join(commonRoot, "r
 const { buildRepoProcedureMemoryContext } = await import(pathToFileURL(join(commonRoot, "repo-memory", "repo-procedure-memory-context.mjs")).href);
 const { buildRepoUserProfilePreferencesContext } = await import(pathToFileURL(join(commonRoot, "repo-memory", "repo-user-profile-context.mjs")).href);
 const { resolveBackendConnection } = await import(pathToFileURL(join(commonRoot, "backend-connection.mjs")).href);
+const { requestMemorySearchGuidance } = await import(pathToFileURL(join(commonRoot, "hooks", "memory-search-guidance.mjs")).href);
 const { postBackendCommand } = await import(pathToFileURL(join(commonRoot, "backend-command.mjs")).href);
 const { resolveWorkBuddyWorkspaceKind } = await import(pathToFileURL(join(commonRoot, "default-workspace.mjs")).href);
 const { ensureBackendAvailable, stringValue: commonStringValue } = await import(pathToFileURL(join(commonRoot, "hooks", "ensure-backend-runner.mjs")).href);
@@ -120,7 +121,8 @@ if (event === "SessionStart") {
       updatedAt: now,
     };
   });
-  const response = await post("/memory/turn-start", { version: 1, client, sessionId, turnId, transcriptPath, prompt, cwd: stringValue(input.cwd), workspaceKind });
+  const turnStartCommand = { version: 1, client, sessionId, turnId, transcriptPath, prompt, cwd: stringValue(input.cwd), workspaceKind };
+  const response = await post("/memory/turn-start", turnStartCommand);
   const repoMemoryWorktree = stringValue(response?.repoMemoryWorktree);
   scheduleMissingRepoMemoryBuild(repoMemoryWorktree, {
     debugEnv: "MEMORAX_CODE_CODEBUDDY_HOOK_DEBUG",
@@ -128,12 +130,14 @@ if (event === "SessionStart") {
   });
   const reminderResult = await evaluateMemorySkillReminder({
     ...reminderOptions,
+    evaluateSearchGuidance: response?.ok === true
+      ? () => requestMemorySearchGuidance({ body: turnStartCommand, memoraxCodeHome: home }) : undefined,
     additionalReminderContext: personalMemoryReminderContext(MEMORY_SKILL_INVOCATION),
     memorySkillInvocation: MEMORY_SKILL_INVOCATION,
     remindOnFirstTurn: true,
     requireTranscriptPath: true,
+    memoryImpactContext: MEMORY_IMPACT_REMINDER_CONTEXT,
     ...(repoMemoryWorktree ? {
-      memoryImpactContext: MEMORY_IMPACT_REMINDER_CONTEXT,
       buildCadenceReminderContext: (hookInput) => buildRepoProcedureMemoryContext({
         ...hookInput,
         cwd: repoMemoryWorktree,

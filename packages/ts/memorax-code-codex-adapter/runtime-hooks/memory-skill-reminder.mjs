@@ -11,6 +11,7 @@ import { scheduleMissingRepoMemoryBuild } from "../../memorax-code-adapter-commo
 import { isRepoMemoryJobWorker } from "../../memorax-code-adapter-common/src/repo-memory/repo-memory-job-context.mjs";
 import { buildRepoProcedureMemoryContext } from "../../memorax-code-adapter-common/src/repo-memory/repo-procedure-memory-context.mjs";
 import { buildRepoUserProfilePreferencesContext } from "../../memorax-code-adapter-common/src/repo-memory/repo-user-profile-context.mjs";
+import { requestMemorySearchGuidance } from "../../memorax-code-adapter-common/src/hooks/memory-search-guidance.mjs";
 import { resolveCodexWorkspaceKind } from "../src/workspace-kind.mjs";
 
 if (isRepoMemoryJobWorker()) process.exit(0);
@@ -51,6 +52,8 @@ try {
       debugEnv: "MEMORAX_CODE_CODEX_HOOK_DEBUG",
       memoryImpactContext: MEMORY_IMPACT_REMINDER_CONTEXT,
       onReminder: turnStartResult.recorded ? recordReminder : undefined,
+      evaluateSearchGuidance: turnStartResult.recorded
+        ? () => requestMemorySearchGuidance({ body: turnStart }) : undefined,
       remindOnFirstTurn: true,
       requireTranscriptPath: true,
       runtime: "codex",

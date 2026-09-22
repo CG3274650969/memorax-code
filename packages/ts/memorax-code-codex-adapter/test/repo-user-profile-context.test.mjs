@@ -14,6 +14,7 @@ const captureHookPath = [runtimeHookPath, "capture-cwd"];
 const MEMORY_REMINDER_CONTEXT = "MemoraX Code reminder: proactively invoke $memorax-code whenever coding memory might help, even when uncertain; follow the skill's router to decide whether any memory operation is needed. Also use $memorax-code for repository-scoped personal memory, and classify the authority before reading or writing.";
 const PROFILE_REMINDER_CONTEXT = "MemoraX Code personal-memory reminder: Use $memorax-code when the user states a durable current-repo identity or interaction preference, asks to list or recall stored personal memory, or explicitly asks to save, update, forget, or delete it. Route reusable action sequences and work rules to procedure memory; do not store repository facts, one-off task details, or secrets.";
 const authorizedWorktreeOverrides = new Map();
+const authorizedGuidanceDecisions = new Map();
 const authorizedBackendRequests = [];
 let authorizedBackendUrl;
 const authorizedBackend = createServer(async (request, response) => {
@@ -24,9 +25,12 @@ const authorizedBackend = createServer(async (request, response) => {
   const repositoryWorktree = authorizedWorktreeOverrides.has(parsed.sessionId)
     ? authorizedWorktreeOverrides.get(parsed.sessionId)
     : parsed.cwd;
-  const result = request.url === "/memory/turn-start" && repositoryWorktree
-    ? { ok: true, repoMemoryWorktree: repositoryWorktree }
-    : { ok: true };
+  const guidanceDecision = authorizedGuidanceDecisions.get(parsed.sessionId)?.get(parsed.turnId);
+  const result = request.url === "/memory/search-guidance"
+    ? guidanceDecision ? { ok: true, decision: guidanceDecision } : { ok: false, reason: "disabled" }
+    : request.url === "/memory/turn-start" && repositoryWorktree
+      ? { ok: true, repoMemoryWorktree: repositoryWorktree }
+      : { ok: true };
   response.writeHead(200, { "content-type": "application/json" });
   response.end(JSON.stringify(result));
 });
@@ -238,24 +242,89 @@ test("repo-scoped contexts use the Backend-authorized worktree and trace the inj
     );
     assert.deepEqual(unavailableRequests.map((request) => request.path), [
       "/memory/turn-start",
+      "/memory/search-guidance",
       "/memory/skill-reminder",
     ]);
-    assert.equal(unavailableRequests[1].body.cwd, hookRepo);
-    assert.equal(unavailableRequests[1].body.content, MEMORY_REMINDER_CONTEXT);
-    assert.deepEqual(unavailableRequests[1].body.triggers, ["cadence"]);
+    assert.deepEqual(unavailableRequests[1].body, unavailableRequests[0].body);
+    assert.equal(unavailableRequests[2].body.cwd, hookRepo);
+    assert.equal(unavailableRequests[2].body.content, MEMORY_REMINDER_CONTEXT);
+    assert.deepEqual(unavailableRequests[2].body.triggers, ["cadence"]);
     const authorizedRequests = authorizedBackendRequests.filter(
       (request) => request.body.sessionId === authorizedSession,
     );
     assert.deepEqual(authorizedRequests.map((request) => request.path), [
       "/memory/turn-start",
+      "/memory/search-guidance",
       "/memory/skill-reminder",
     ]);
-    assert.equal(authorizedRequests[1].body.cwd, hookRepo);
-    assert.equal(authorizedRequests[1].body.content, authorizedContext);
-    assert.deepEqual(authorizedRequests[1].body.triggers, ["cadence"]);
+    assert.deepEqual(authorizedRequests[1].body, authorizedRequests[0].body);
+    assert.equal(authorizedRequests[2].body.cwd, hookRepo);
+    assert.equal(authorizedRequests[2].body.content, authorizedContext);
+    assert.deepEqual(authorizedRequests[2].body.triggers, ["cadence"]);
   } finally {
     authorizedWorktreeOverrides.delete(unavailableSession);
     authorizedWorktreeOverrides.delete(authorizedSession);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test("native Codex prompts evaluate Jev independently of personal-memory cadence and skip duplicates", async () => {
+  const root = await mkdtemp(join(tmpdir(), "memorax-code-jev-native-hook-"));
+  const sessionId = "jev-native-thread";
+  authorizedGuidanceDecisions.set(sessionId, new Map([
+    ["turn-1", "skip"], ["turn-2", "search"], ["turn-3", "skip"], ["turn-4", "skip"],
+  ]));
+  try {
+    const repo = await createRepo(root, "jev");
+    const memoraxCodeHome = join(root, "memorax-code");
+    await writeRegistry(memoraxCodeHome, sessionId);
+    await writeFile(join(memoraxCodeHome, "config.toml"), "[memory.skill_reminder]\ninterval_turns = 3\n");
+    await writePreferences(repo, [preference("pref_jev", "Prefer concise fixture responses.", "Always.", "")]);
+    await writeProcedure(repo, "fixture-testing.md", "# Fixture testing\n\nRun the focused fixture test first.");
+    const prompt = (turn) => runHook(hookPath, {
+      hook_event_name: "UserPromptSubmit", session_id: sessionId, turn_id: "turn-" + turn,
+      transcript_path: join(root, "session.jsonl"), cwd: repo, prompt: "Task " + turn,
+    }, { MEMORAX_CODE_HOME: memoraxCodeHome, HOME: root, USERPROFILE: root });
+
+    const first = await prompt(1);
+    assert.equal(first.code, 0, first.stderr);
+    const firstContext = reminderContext(first.stdout);
+    assert.match(firstContext, /Prefer concise fixture responses/);
+    assert.match(firstContext, /Run the focused fixture test first/);
+    assert.doesNotMatch(firstContext, /proactively invoke|Jev selected/);
+
+    const second = await prompt(2);
+    assert.equal(second.code, 0, second.stderr);
+    const secondContext = reminderContext(second.stdout);
+    assert.match(secondContext, /Jev selected Coding Memory search/);
+    assert.match(secondContext, /\$memorax-code/);
+    assert.match(secondContext, /references\/memorax-search\.md/);
+    assert.doesNotMatch(secondContext, /search --query|without rereading/);
+    assert.doesNotMatch(secondContext, /proactively invoke|personal-memory reminder|Prefer concise fixture responses|Run the focused fixture test first/);
+    const duplicate = await prompt(2);
+    assert.equal(duplicate.code, 0, duplicate.stderr);
+    assert.equal(duplicate.stdout, "");
+    const third = await prompt(3);
+    assert.equal(third.code, 0, third.stderr);
+    assert.equal(third.stdout, "");
+
+    const fourth = await prompt(4);
+    assert.equal(fourth.code, 0, fourth.stderr);
+    const fourthContext = reminderContext(fourth.stdout);
+    assert.match(fourthContext, /Run the focused fixture test first/);
+    assert.doesNotMatch(fourthContext, /Prefer concise fixture responses|proactively invoke|Jev selected/);
+    const requests = authorizedBackendRequests.filter(({ body }) => body.sessionId === sessionId);
+    const guidance = requests.filter(({ path }) => path === "/memory/search-guidance");
+    assert.deepEqual(guidance.map(({ body }) => body.turnId), ["turn-1", "turn-2", "turn-3", "turn-4"]);
+    for (const { body } of guidance) {
+      assert.deepEqual(body, requests.find((request) => request.path === "/memory/turn-start" && request.body.turnId === body.turnId).body);
+    }
+    assert.deepEqual(requests.filter(({ path }) => path === "/memory/skill-reminder").map(({ body }) => body.triggers), [
+      ["search_guidance", "cadence"], ["search_guidance"], ["search_guidance", "cadence"],
+    ]);
+  } finally {
+    authorizedGuidanceDecisions.delete(sessionId);
     await rm(root, { recursive: true, force: true });
   }
 });

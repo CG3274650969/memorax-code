@@ -277,6 +277,7 @@ export function createCursorMemoryHookRuntime(
       }
       const createdAt = now();
       const traceContext = traceContextFromCursorHookBody(command, new Date(createdAt).toISOString());
+      let retiredTurnId: string | undefined;
       try {
         return await withCursorSessionRecord(stateOptions(command.sessionId), async (record, save) => {
           if (record.retiredTurnIds.includes(command.turnId)) {
@@ -322,7 +323,9 @@ export function createCursorMemoryHookRuntime(
           }
           if (previous) {
             retireCursorGeneration(record);
-            turnCoordinator.discardTurn(turnKey(command.sessionId, previous.turnId), "interrupted");
+            retiredTurnId = previous.turnId;
+            turnCoordinator.discardTurn(turnKey(command.sessionId, previous.turnId),
+              previous.state === "blocked" || previous.state === "interrupted" ? "interrupted" : "superseded");
             options.diagnosticLogger?.("cursor_memory.turn_discarded", {
               sessionId: command.sessionId, turnId: previous.turnId, reason: "generation_replaced",
             });
@@ -349,6 +352,7 @@ export function createCursorMemoryHookRuntime(
           const result = await memory.recordTurnStart({
             sessionId: command.sessionId, clientTurnId: command.turnId,
             cwd: command.cwd, workspaceKind: command.workspaceKind, transcriptPath: command.transcriptPath,
+            databasePath: command.databasePath,
             createdAt, traceContext, prompt: command.prompt, repositoryMemory,
             onTurnRegistered(metadata) {
               turn.metadata = {
@@ -386,6 +390,7 @@ export function createCursorMemoryHookRuntime(
           return { ...result, recorded: true, ...(restorePersonalMemory ? { restorePersonalMemory: true } : {}) };
         });
       } catch (error) {
+        if (retiredTurnId) turnCoordinator.discardTurn(turnKey(command.sessionId, retiredTurnId), "interrupted");
         reportFailure("memory.turn-start", "turn_state_unavailable", command, undefined, undefined, false, error);
         diagnostic("turn_state_unavailable", command);
         // Retrying outside the lock could publish stale CLI identity after a

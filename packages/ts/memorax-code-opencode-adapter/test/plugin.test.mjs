@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
+import { evaluateMemorySkillReminder } from "../../memorax-code-adapter-common/src/hooks/memory-skill-reminder-hook.mjs";
 import { createMemoraxOpenCodePlugin } from "../src/plugin.mjs";
 import { OPENCODE_REPO_MEMORY_AGENT } from "../src/repo-memory-server-runner.mjs";
 
@@ -161,7 +162,7 @@ test("repo-scoped reminder builders require a Backend-authorized worktree", asyn
   assert.match(authorized.message.system, /Natural final-answer mention for supported coding agents:/);
   assert.match(authorized.message.system, /generic label `Memory`/);
   assert.deepEqual(evaluations, [
-    { profileBuilder: false, procedureBuilder: false, impactContext: false, cwd: "/repo/worktree" },
+    { profileBuilder: false, procedureBuilder: false, impactContext: true, cwd: "/repo/worktree" },
     { profileBuilder: true, procedureBuilder: true, impactContext: true, cwd: "/repo/worktree" },
   ]);
 });
@@ -288,9 +289,14 @@ test("managed plugin starts the Backend once and bounds prompt waiting", async (
     assert.equal(second.message.system, "Local reminder context.");
 
     await writeFile(releasePath, "release\n");
-    await hooks.dispose();
-    await prompt("user-start-3");
+    for (let attempt = 0; requests.length === 0 && attempt < 100; attempt += 1) {
+      await delay(10);
+      await prompt("user-start-3");
+    }
     assert.equal(requests.length, 1);
+    await hooks.dispose();
+    await prompt("user-start-4");
+    assert.equal(requests.length, 1, "disposed plugins must not accept another prompt");
   } finally {
     process.execPath = nodePath;
     await writeFile(releasePath, "release\n").catch(() => undefined);
@@ -1078,3 +1084,153 @@ async function waitForFile(path) {
   }
   throw new Error(`Timed out waiting for ${path}`);
 }
+
+test("OpenCode routes a Jev search decision to its Skill Search reference off cadence", async () => {
+  const memoraxCodeHome = await mkdtemp(join(tmpdir(), "memorax-opencode-jev-search-"));
+  const requests = [];
+  const hooks = await createMemoraxOpenCodePlugin({
+    memoraxCodeHome, backendConnection: { url: "http://127.0.0.1:8787" },
+    fetchImpl: async (url, request) => {
+      const path = new URL(url).pathname;
+      const body = JSON.parse(request.body);
+      requests.push({ path, body });
+      return Response.json(path === "/memory/search-guidance"
+        ? { ok: true, decision: body.userMessageId === "prompt-2" ? "search" : "skip" }
+        : { ok: true });
+    },
+  })(pluginInput());
+  try {
+    const first = promptOutput("prompt-1", "First request");
+    await hooks["chat.message"]({ sessionID: "jev-search" }, first);
+    assert.doesNotMatch(first.message.system, /proactively invoke|Jev selected/);
+    const second = promptOutput("prompt-2", "Recall the earlier implementation decision");
+    await hooks["chat.message"]({ sessionID: "jev-search" }, second);
+    assert.match(second.message.system, /Jev selected Coding Memory search/);
+    assert.match(second.message.system, /the `memorax-code` skill/);
+    assert.match(second.message.system, /references\/memorax-search\.md/);
+    assert.doesNotMatch(second.message.system, /search --query|without rereading|\$memorax-code|proactively invoke|personal-memory reminder/);
+    assert.deepEqual(requests.filter(({ path }) => path === "/memory/search-guidance").map(({ body }) => body),
+      requests.filter(({ path }) => path === "/memory/turn-start").map(({ body }) => body));
+  } finally {
+    await hooks.dispose();
+    await rm(memoraxCodeHome, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode cancellation during Jev never injects fallback or loses pending compaction", async (t) => {
+  for (const cancellation of ["dispose", "caller"]) {
+    await t.test(cancellation, async () => {
+      const memoraxCodeHome = await mkdtemp(join(tmpdir(), "memorax-opencode-jev-cancel-"));
+      const requests = [];
+      let guidanceStarted;
+      const started = new Promise((resolve) => { guidanceStarted = resolve; });
+      const controller = new AbortController();
+      const hooks = await createMemoraxOpenCodePlugin({
+        memoraxCodeHome, backendConnection: { url: "http://127.0.0.1:8787" },
+        fetchImpl: async (url, request) => {
+          const path = new URL(url).pathname;
+          requests.push(path);
+          if (path !== "/memory/search-guidance") return Response.json({ ok: true });
+          return new Promise((resolve, reject) => {
+            request.signal.addEventListener("abort", () => reject(request.signal.reason), { once: true });
+            guidanceStarted();
+          });
+        },
+      })(pluginInput());
+      try {
+        hooks.event({ event: { type: "session.compacted", properties: { sessionID: "cancelled" } } });
+        const output = promptOutput("prompt-1", "Current request", "Existing context");
+        const pending = hooks["chat.message"]({ sessionID: "cancelled", signal: controller.signal }, output);
+        await started;
+        if (cancellation === "dispose") await hooks.dispose();
+        else controller.abort();
+        await pending;
+        assert.equal(output.message.system, "Existing context");
+        assert.deepEqual(requests, ["/memory/turn-start", "/memory/search-guidance"]);
+        const state = JSON.parse(await readFile(join(memoraxCodeHome, "adapters", "opencode", "memory-skill-reminders.json"), "utf8"));
+        assert.equal(state.sessions.cancelled.supplementalReminderPending, true);
+      } finally {
+        await hooks.dispose();
+        await rm(memoraxCodeHome, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("OpenCode disposal retains undelivered cadence and Profile across plugin recreation", async (t) => {
+  for (const scenario of [
+    { cancelledTurn: 1, resumedTurn: 1, phase: "guidance", decision: "skip" },
+    { cancelledTurn: 1, resumedTurn: 2, phase: "after helper", decision: "unavailable" },
+    { cancelledTurn: 6, resumedTurn: 6, phase: "after helper", decision: "skip" },
+    { cancelledTurn: 6, resumedTurn: 7, phase: "guidance", decision: "unavailable" },
+  ]) {
+    await t.test(JSON.stringify(scenario), async () => {
+      const memoraxCodeHome = await mkdtemp(join(tmpdir(), "memorax-opencode-reminder-recovery-"));
+      const guidanceRequests = [];
+      let cancelling = false;
+      let guidanceStarted;
+      const started = new Promise((resolve) => { guidanceStarted = resolve; });
+      let hooks;
+      const createHooks = () => createMemoraxOpenCodePlugin({
+        memoraxCodeHome, backendConnection: { url: "http://127.0.0.1:8787" },
+        memorySkillReminderEvaluator: async (options, input) => {
+          const result = await evaluateMemorySkillReminder({
+            ...options,
+            buildPersonalMemoryContext: async () => "Fixture Profile context.",
+            buildCadenceReminderContext: async () => "Fixture Procedure context.",
+          }, input);
+          if (cancelling && scenario.phase === "after helper") await hooks.dispose();
+          return result;
+        },
+        fetchImpl: async (url, request) => {
+          const path = new URL(url).pathname;
+          if (path !== "/memory/search-guidance") return Response.json({ ok: true });
+          guidanceRequests.push(JSON.parse(request.body).userMessageId);
+          if (cancelling && scenario.phase === "guidance") {
+            return new Promise((resolve, reject) => {
+              request.signal.addEventListener("abort", () => reject(request.signal.reason), { once: true });
+              guidanceStarted();
+            });
+          }
+          return Response.json(scenario.decision === "skip"
+            ? { ok: true, decision: "skip" } : { ok: false, reason: "timeout" });
+        },
+      })(pluginInput());
+      const submit = async (turn) => {
+        const output = promptOutput(`prompt-${turn}`, "Current request", "Existing context");
+        await hooks["chat.message"]({ sessionID: "recovery" }, output);
+        return output;
+      };
+      try {
+        hooks = await createHooks();
+        for (let turn = 1; turn < scenario.cancelledTurn; turn += 1) await submit(turn);
+        cancelling = true;
+        const pending = submit(scenario.cancelledTurn);
+        if (scenario.phase === "guidance") {
+          await started;
+          await hooks.dispose();
+        }
+        assert.equal((await pending).message.system, "Existing context");
+        cancelling = false;
+        hooks = await createHooks();
+        const resumed = await submit(scenario.resumedTurn);
+        assert.match(resumed.message.system, /Fixture Procedure context/);
+        if (scenario.cancelledTurn === 1) assert.match(resumed.message.system, /Fixture Profile context/);
+        else assert.doesNotMatch(resumed.message.system, /Fixture Profile context/);
+        if (scenario.decision === "skip") assert.doesNotMatch(resumed.message.system, /proactively invoke/);
+        else assert.match(resumed.message.system, /proactively invoke/);
+        const statePath = join(memoraxCodeHome, "adapters", "opencode", "memory-skill-reminders.json");
+        const state = JSON.parse(await readFile(statePath, "utf8")).sessions.recovery;
+        assert.equal(state.turnCount, scenario.resumedTurn);
+        const guidanceCount = guidanceRequests.length;
+        assert.equal((await submit(scenario.resumedTurn)).message.system, "Existing context");
+        assert.equal(guidanceRequests.length, guidanceCount, "a delivered retry remains deduplicated");
+        const next = await submit(scenario.resumedTurn + 1);
+        assert.doesNotMatch(next.message.system, /Fixture Profile context|Fixture Procedure context/);
+      } finally {
+        await hooks?.dispose();
+        await rm(memoraxCodeHome, { recursive: true, force: true });
+      }
+    });
+  }
+});

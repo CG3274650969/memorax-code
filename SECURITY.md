@@ -249,9 +249,12 @@ Jev is a separate hosted service, disabled by default. Its adapter requires
 an explicit enable setting and a Jev API key in private configuration or an
 environment override. The configured key is used only to construct the
 Authorization bearer header for the fixed TypeSafe HTTPS endpoint; provider
-results and configuration status do not expose the configured credential. The current integration does not invoke Jev from Hooks or
-Skill reminders, so enabling its configuration alone sends no conversation
-content.
+results and configuration status do not expose the configured credential.
+When enabled and configured, each eligible distinct user request can invoke
+Jev before the agent receives retrieval guidance, independently of the Skill
+reminder cadence. Repeated native Turn events are deduplicated. Disabled Jev
+keeps the existing reminder cadence without sending conversation content to
+TypeSafe.
 
 When invoked, the adapter sends fixed Coding Memory retrieval criteria and
 bounded original text: the current user request and, when supplied, the
@@ -262,12 +265,26 @@ retained trace, diagnostic records, or repository files, or add Session, Turn,
 repository-identity, or local-provenance metadata fields. The external service's
 own terms and data-handling policy govern the text it receives.
 
+The Backend keeps bounded context in memory for this decision, qualified by
+client, session, and scope. Prior context comes only from the immediately
+preceding observed, validated native completion, independently of automatic
+Add enablement; it is not read from
+retained trace and is not written to a new conversation-history file. Restart,
+eviction, or missing eligible prior content leaves current-request-only input.
+A missing registered current request prevents evaluation.
+Submitted native references must match the registered values and field
+presence. Explicit interruption or rollback invalidates the matching guidance
+context and any in-flight decision; a late start or completion for that
+invalidated Turn cannot reactivate its retained context.
+
 A valid Jev response produces a binary Search or skip recommendation from its
 probability. It cannot authorize session correlation, scope changes, completion,
 permissions, or memory writes. Invalid configuration prevents a request;
 non-execution, invalid input or responses, and transport failures return a
 separate unsuccessful result with a fixed reason, without exposing raw response
-bodies or exception details.
+bodies or exception details. Failed evaluation falls back to the existing
+reminder cadence and does not add a generic reminder on other turns. Jev does
+not execute Search or suppress independent personal-memory delivery.
 
 ## Local Data and Diagnostics
 

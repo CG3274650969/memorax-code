@@ -27,10 +27,9 @@ test("UserPromptSubmit manifest declares the Claude memory reminder hook", async
 
   assert.deepEqual(commands, [
     "node \"${CLAUDE_PLUGIN_ROOT}/hooks/runtime-hook.mjs\" capture-cwd",
-    "node \"${CLAUDE_PLUGIN_ROOT}/hooks/runtime-hook.mjs\" memory-turn",
     "node \"${CLAUDE_PLUGIN_ROOT}/hooks/runtime-hook.mjs\" memory-skill-reminder",
   ]);
-  assert.equal(manifest.hooks.UserPromptSubmit[0].hooks[2].timeout, undefined);
+  assert.equal(manifest.hooks.UserPromptSubmit[0].hooks[1].timeout, 20);
 });
 
 test("Claude memory skill reminder mirrors due context to the Backend trace contract", async () => {
@@ -93,6 +92,14 @@ test("Claude memory skill reminder mirrors due context to the Backend trace cont
       },
     }]);
     assert.equal(recorder.requestHeaders[0]["x-memorax-code-backend-token"], "backend-token");
+    assert.deepEqual(recorder.guidanceRequests[0], recorder.turnStarts[0]);
+    assert.deepEqual(recorder.guidanceRequests, [{
+      version: 1, client: "claude-code", sessionId: "trace-thread", promptId: "prompt-1",
+      transcriptPath: "/tmp/claude-trace-thread.jsonl", cwd: "/repo", workspaceKind: "git", prompt: "first prompt",
+    }, {
+      version: 1, client: "claude-code", sessionId: "trace-thread", promptId: "prompt-2",
+      transcriptPath: "/tmp/claude-trace-thread.jsonl", cwd: "/repo", workspaceKind: "git", prompt: "second prompt",
+    }]);
   } finally {
     await recorder.close();
     await rm(root, { recursive: true, force: true });
@@ -523,10 +530,24 @@ function runScript(scriptPath, input, env = {}, component) {
 
 async function listenRecorder({ hang = false, statusCode = 200 } = {}) {
   const requests = [];
+  const guidanceRequests = [];
+  const turnStarts = [];
   const requestHeaders = [];
   const server = createServer(async (req, res) => {
     let body = "";
     for await (const chunk of req) body += String(chunk);
+    if (req.url === "/memory/turn-start") {
+      turnStarts.push(JSON.parse(body));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    if (req.url === "/memory/search-guidance") {
+      guidanceRequests.push(JSON.parse(body));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: false, reason: "disabled" }));
+      return;
+    }
     requests.push({
       path: req.url,
       body: JSON.parse(body),
@@ -540,6 +561,8 @@ async function listenRecorder({ hang = false, statusCode = 200 } = {}) {
   const address = server.address();
   return {
     requests,
+    guidanceRequests,
+    turnStarts,
     requestHeaders,
     url: `http://127.0.0.1:${address.port}`,
     close: () => new Promise((resolveClose) => {

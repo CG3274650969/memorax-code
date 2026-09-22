@@ -538,6 +538,7 @@ async function createFixture({ recordDatabasePath = false } = {}) {
   const home = join(root, "state");
   const cursorHome = join(root, "cursor");
   const requests = [];
+  const guidanceRequests = [];
   const control = { status: 200, body: { ok: true, recorded: true }, stallReminder: false };
   const server = createServer(async (request, response) => {
     if (request.url === "/health") {
@@ -545,8 +546,19 @@ async function createFixture({ recordDatabasePath = false } = {}) {
       response.end(JSON.stringify({ ok: control.healthy !== false, service: "memorax-code-backend" }));
       return;
     }
+    if (request.url === "/memory/search-guidance" && request.method === "GET") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ enabled: control.guidance?.ok === true }));
+      return;
+    }
     let text = "";
     for await (const chunk of request) text += chunk;
+    if (request.url === "/memory/search-guidance") {
+      guidanceRequests.push(JSON.parse(text));
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(control.guidance ?? { ok: false, reason: "disabled" }));
+      return;
+    }
     requests.push({ path: request.url, body: JSON.parse(text) });
     if (request.url === "/memory/skill-reminder" && control.stallReminder) return;
     response.writeHead(control.status, { "content-type": "application/json" });
@@ -566,7 +578,7 @@ async function createFixture({ recordDatabasePath = false } = {}) {
   }
   assert.equal(installed.ok, true, installed.error);
   const state = JSON.parse(await readFile(installed.statePath, "utf8"));
-  return { root, home, cursorHome, requests, control, server, runtimePath: state.runtimePath,
+  return { root, home, cursorHome, requests, guidanceRequests, control, server, runtimePath: state.runtimePath,
     databasePath: cursorDatabasePath({ env: databaseEnv, home: root }),
     runtimeDigest: state.runtimeDigest,
     async close() {
@@ -624,3 +636,32 @@ async function waitForFixtureLeaseExit(pid) {
   try { process.kill(pid, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; }
   assert.fail("fixture lease guard did not stop within its cleanup budget");
 }
+
+test("Cursor evaluates Jev on every prompt while keeping bootstrap and personal memory", async () => {
+  const fixture = await createFixture();
+  try {
+    fixture.control.guidance = { ok: true, decision: "skip" };
+    const bootstrap = JSON.parse((await runHook(fixture, { hook_event_name: "sessionStart" })).stdout);
+    assert.doesNotMatch(bootstrap.additional_context, /proactively invoke/);
+    assert.match(bootstrap.additional_context, /personal-memory reminder/);
+    assertMaintenanceContext(bootstrap.additional_context, fixture);
+    const first = JSON.parse((await runHook(fixture, { hook_event_name: "beforeSubmitPrompt", prompt: "First task" })).stdout);
+    assert.doesNotMatch(first.additional_context, /proactively invoke|Jev selected/);
+    assert.match(first.additional_context, /personal-memory reminder/);
+    assert.deepEqual(fixture.guidanceRequests[0], fixture.requests.find(({ path }) => path === "/memory/turn-start").body);
+    for (let turn = 2; turn <= 6; turn += 1) {
+      fixture.control.guidance = { ok: true, decision: "search" };
+      const output = JSON.parse((await runHook(fixture, {
+        hook_event_name: "beforeSubmitPrompt", prompt: "Next task",
+        generation_id: "22222222-2222-4222-8222-" + String(turn).padStart(12, "0"),
+      })).stdout);
+      assert.match(output.additional_context, /Jev selected Coding Memory search/);
+      assert.match(output.additional_context, /the `memorax-code` skill/);
+      assert.match(output.additional_context, /references\/memorax-search\.md/);
+      assert.doesNotMatch(output.additional_context, /search --query|without rereading|\$memorax-code/);
+      assert.match(output.additional_context, /Natural final-answer mention/);
+      assert.doesNotMatch(output.additional_context, /proactively invoke/);
+    }
+    assert.equal(fixture.guidanceRequests.length, 6);
+  } finally { await fixture.close(); }
+});

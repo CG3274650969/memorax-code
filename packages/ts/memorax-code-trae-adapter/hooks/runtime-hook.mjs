@@ -13,6 +13,7 @@ const commonRoot = join(runtimeRoot, "memorax-code-adapter-common", "src");
 const { buildRepoProcedureMemoryContext } = await import(pathToFileURL(join(commonRoot, "repo-memory", "repo-procedure-memory-context.mjs")).href);
 const { buildRepoUserProfilePreferencesContext } = await import(pathToFileURL(join(commonRoot, "repo-memory", "repo-user-profile-context.mjs")).href);
 const { resolveBackendConnection } = await import(pathToFileURL(join(commonRoot, "backend-connection.mjs")).href);
+const { requestMemorySearchGuidance } = await import(pathToFileURL(join(commonRoot, "hooks", "memory-search-guidance.mjs")).href);
 const { postBackendCommand } = await import(pathToFileURL(join(commonRoot, "backend-command.mjs")).href);
 const {
   atomicWriteJson,
@@ -97,7 +98,7 @@ if (event === "SessionStart") {
   const workspaceKind = stringValue(input.workspace_kind) ?? stringValue(input.workspaceKind);
   const activeTurnPlan = prepareActiveTurn({ sessionId, prompt, cwd, workspaceKind });
   const activeTurn = activeTurnPlan.record;
-  const response = await post("/memory/turn-start", {
+  const turnStartCommand = {
     version: 1,
     client: "trae",
     sessionId,
@@ -105,18 +106,20 @@ if (event === "SessionStart") {
     prompt,
     cwd,
     workspaceKind,
-  });
+  };
+  const response = await post("/memory/turn-start", turnStartCommand);
   // Only accepted starts may replace the persisted prompt used to pair Stop.
   if (response?.ok !== true || !commitActiveTurn(activeTurnPlan)) process.exit(0);
   const repoMemoryWorktree = stringValue(response?.repoMemoryWorktree);
   const reminderResult = await evaluateMemorySkillReminder({
     ...reminderOptions,
+    evaluateSearchGuidance: () => requestMemorySearchGuidance({ body: turnStartCommand, memoraxCodeHome: home }),
     additionalReminderContext: personalMemoryReminderContext(MEMORY_SKILL_INVOCATION),
     memorySkillInvocation: MEMORY_SKILL_INVOCATION,
     remindOnFirstTurn: true,
     requireTranscriptPath: false,
+    memoryImpactContext: MEMORY_IMPACT_REMINDER_CONTEXT,
     ...(repoMemoryWorktree ? {
-      memoryImpactContext: MEMORY_IMPACT_REMINDER_CONTEXT,
       buildCadenceReminderContext: (hookInput) => buildRepoProcedureMemoryContext({
         ...hookInput,
         cwd: repoMemoryWorktree,

@@ -1,7 +1,7 @@
 import {
   type AutomaticMemoryWritebackRejectionReason,
 } from "../../memory/automatic-writeback.js";
-import { createHarnessMemoryRuntime } from "../../memory/harness-runtime.js";
+import { createHarnessMemoryRuntime, type HarnessMemoryRuntimeOptions } from "../../memory/harness-runtime.js";
 import type {
   DshTurnStartCommand,
   DshWritebackCommand,
@@ -46,6 +46,7 @@ export type DshMemoryHookRuntimeOptions = {
   diagnosticLogger?: MemoryDiagnosticLogger;
   env?: Record<string, string | undefined>;
   fetchImpl?: typeof fetch;
+  searchGuidance?: HarnessMemoryRuntimeOptions["searchGuidance"];
   now?: () => number;
   maxEntries?: number;
   memoryObservability?: MemoryObservabilityHook;
@@ -151,6 +152,7 @@ export function createDshMemoryHookRuntime(
         }),
         userText: materialized.turn.userPrompt,
         assistantText: materialized.turn.assistantReply,
+        searchAssistantText: materialized.turn.finalAssistantReply,
         userTimestamp: materialized.turn.userTimestamp,
         assistantTimestamp: materialized.turn.assistantTimestamp,
         traceContext,
