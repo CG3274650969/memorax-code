@@ -27,6 +27,10 @@ export type MemoraxCodeConfig = Readonly<{
     user_id?: string;
     timeout_ms?: number;
   }>;
+  jev?: Readonly<{
+    enabled?: boolean;
+    api_key?: string;
+  }>;
   memory?: Readonly<{
     retrieval?: Readonly<{
       top_k?: number;
@@ -161,6 +165,11 @@ export function renderDefaultMemoraxCodeConfig(): string {
     '# api_key = "" # MemoraX API key used by the local Backend.',
     '# user_id = "" # MemoraX base user ID; requests derive a workspace-scoped namespace.',
     "",
+    "# Optional Jev connection. Enabling allows bounded task context to be sent to TypeSafe.",
+    "[jev]",
+    "enabled = false # A configured API key does not enable Jev by itself.",
+    'api_key = "" # TypeSafe API key; never include it in shared diagnostics.',
+    "",
     "# Automatic writeback sends selected prompts and final answers to MemoraX.",
     "[memory.writeback]",
     "enabled = true # Allow supported client sessions to write memories after replies.",
@@ -249,8 +258,9 @@ export function loadMemoraxCodeConfig(
 
   try {
     return normalizeMemoraxCodeConfig(parse(text));
-  } catch (error) {
-    (options.warn ?? console.warn)(`failed to parse MemoraX Code config ${path}: ${errorMessage(error)}`);
+  } catch {
+    // Parser errors may include source lines containing credentials.
+    (options.warn ?? console.warn)(`failed to parse MemoraX Code config ${path}`);
     return {};
   }
 }
@@ -281,6 +291,7 @@ function normalizeMemoraxCodeConfig(value: unknown): MemoraxCodeConfig {
   const root = recordValue(value);
   const clients = recordValue(root?.clients);
   const memorax = recordValue(root?.memorax);
+  const jev = recordValue(root?.jev);
   const memory = recordValue(root?.memory);
   const trace = recordValue(root?.trace);
   const retrieval = recordValue(memory?.retrieval);
@@ -315,6 +326,10 @@ function normalizeMemoraxCodeConfig(value: unknown): MemoraxCodeConfig {
       api_key: stringField(memorax, "api_key"),
       user_id: stringField(memorax, "user_id"),
       timeout_ms: numberField(memorax, "timeout_ms"),
+    }),
+    jev: prune({
+      enabled: booleanField(jev, "enabled"),
+      api_key: stringField(jev, "api_key"),
     }),
     memory: prune({
       retrieval: prune({

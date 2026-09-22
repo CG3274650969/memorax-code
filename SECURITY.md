@@ -3,8 +3,8 @@
 MemoraX Code is a local-first integration for Codex, Claude Code,
 CodeBuddy/WorkBuddy, DeepSeek Harness (DSH), OpenCode, Trae, and Cursor with an optional
 external bind mode and required communication with MemoraX for cloud-backed memory. Security reports should
-distinguish the local Backend, client-owned provider traffic, and MemoraX
-memory traffic.
+distinguish the local Backend, client-owned provider traffic, MemoraX
+memory traffic, and the optional Jev evaluation provider.
 
 ## Supported Versions
 
@@ -31,7 +31,9 @@ Please allow time for triage and remediation before public disclosure.
 
 - Codex, Claude Code, CodeBuddy/WorkBuddy, DeepSeek Harness, OpenCode, Trae, and Cursor own provider credentials,
   models, native tools, and provider traffic. MemoraX Code does not proxy
-  model-provider traffic and does not need client provider credentials.
+  model-provider traffic and does not need client provider credentials. The
+  optional Jev evaluation adapter uses its own explicit configuration and key;
+  it does not execute client tasks or inherit their provider credentials.
 - The managed Backend binds to loopback by default. External binding requires
   explicit opt-in and a Backend token; deployment operators must provide an
   appropriate authenticated and encrypted network boundary.
@@ -241,6 +243,32 @@ for commands and process-inheritance requirements. These controls do not
 cancel in-flight requests or guarantee removal of previously buffered turns;
 graceful Backend shutdown can flush pending writeback.
 
+### Jev semantic judgment traffic
+
+Jev is a separate hosted service, disabled by default. Its adapter requires
+an explicit enable setting and a Jev API key in private configuration or an
+environment override. The configured key is used only to construct the
+Authorization bearer header for the fixed TypeSafe HTTPS endpoint; provider
+results and configuration status do not expose the configured credential. The current integration does not invoke Jev from Hooks or
+Skill reminders, so enabling its configuration alone sends no conversation
+content.
+
+When invoked, the adapter sends fixed Coding Memory retrieval criteria and
+bounded original text: the current user request and, when supplied, the
+previous user request and final assistant reply. Text is trimmed and length
+limited but is not redacted, including any literal credentials or examples
+already present in that text. The adapter does not read native transcripts,
+retained trace, diagnostic records, or repository files, or add Session, Turn,
+repository-identity, or local-provenance metadata fields. The external service's
+own terms and data-handling policy govern the text it receives.
+
+A valid Jev response produces a binary Search or skip recommendation from its
+probability. It cannot authorize session correlation, scope changes, completion,
+permissions, or memory writes. Invalid configuration prevents a request;
+non-execution, invalid input or responses, and transport failures return a
+separate unsuccessful result with a fixed reason, without exposing raw response
+bodies or exception details.
+
 ## Local Data and Diagnostics
 
 `MEMORAX_CODE_HOME` defaults to `~/.memorax-code` and contains configuration,
@@ -291,7 +319,7 @@ Depending on the enabled client capabilities, traces may include prompts,
 responses, recalled memory, writeback content, reminder text, and local paths.
 Trace files stay under `MEMORAX_CODE_HOME`. The shipped package has no trace
 uploader, collector, receiver, or export command. This does not change the
-separate MemoraX queries and writeback described above.
+separate MemoraX queries, writeback, or opt-in Jev evaluation described above.
 
 Disabling trace event capture preserves current-turn operational records for
 client/session identity, workspace association, and exact recovery. These local
