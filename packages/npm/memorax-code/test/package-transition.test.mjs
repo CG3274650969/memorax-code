@@ -176,6 +176,28 @@ test("a live Backend is retired before replacement and restored once afterward",
   }
 });
 
+test("postinstall publishes a one-shot marker when an update parent requests it", async () => {
+  const fixture = await createFixture({ transitionText: recordText() });
+  try {
+    const transition = await import(pathToFileURL(join(fixture.root, "lib", "package-transition.mjs")).href);
+    await transition.runNpmPostinstallPackageTransition({
+      memoraxCodeHome: fixture.home,
+      memoraxCodeBin: join(fixture.root, "bin", "memorax-code.mjs"),
+      writeRestoreMarker: true,
+    });
+    assert.equal(
+      transition.consumePackageRestoreMarker(fixture.home, "123e4567-e89b-42d3-a456-426614174000"),
+      true,
+    );
+    assert.equal(
+      transition.consumePackageRestoreMarker(fixture.home, "123e4567-e89b-42d3-a456-426614174000"),
+      false,
+    );
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 test("relative MEMORAX_CODE_HOME is resolved before lifecycle commands change cwd", async () => {
   const fixture = await createFixture({ pid: process.pid });
   try {

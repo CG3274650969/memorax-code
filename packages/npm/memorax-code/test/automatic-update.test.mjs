@@ -50,6 +50,22 @@ test("automatic update installs an exact target and reconciles configured client
   assert.deepEqual(Object.keys(state).sort(), ["installedVersion", "nextCheckAt", "version"]);
 });
 
+test("automatic update passes restored Backend state to reconciliation", async (t) => {
+  const { api, memoraxCodeHome } = await fixture(t);
+  let setupOptions;
+  const result = await api.runAutomaticUpdateCore(options(memoraxCodeHome, "08:00:00", {
+    resolveTargetVersion: async () => "0.1.10",
+    installVersion: async () => ({ exitCode: 0, restored: true }),
+    reconcile: async (_version, value) => {
+      setupOptions = value;
+      return true;
+    },
+  }));
+
+  assert.equal(result.disposition, "updated");
+  assert.deepEqual(setupOptions, { reuseRestoredBackend: true });
+});
+
 test("automatic update retries failures after fifteen minutes and repairs stale setup", async (t) => {
   const { api, diagnostics, memoraxCodeHome } = await fixture(t);
   let checks = 0;
