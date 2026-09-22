@@ -22,6 +22,7 @@ import { createCodeBuddyMemoryHookRuntime, type CodeBuddyMemoryHookWritebackResu
 import { createTraeMemoryHookRuntime, type TraeMemoryHookWritebackResult } from "../clients/trae/memory-hook-runtime.js";
 import { createCursorMemoryHookRuntime, type CursorMemoryHookPreCompactResult, type CursorMemoryHookWritebackResult } from "../clients/cursor/memory-hook-runtime.js";
 import { createMemoryTurnCoordinator } from "./turn-coordinator.js";
+import { createMemorySearchGuidanceRuntime, type MemorySearchGuidanceRuntime } from "./search-guidance.js";
 import {
   createRepositoryMemorySessionRuntime,
 } from "./repository-session.js";
@@ -35,7 +36,7 @@ import type {
 
 export type MemoryServiceOptions = Omit<
   CodexMemoryHookRuntimeOptions,
-  "automaticWriteback" | "pendingQuotaNotice" | "repositoryMemorySession" | "turnCoordinator"
+  "automaticWriteback" | "pendingQuotaNotice" | "repositoryMemorySession" | "turnCoordinator" | "searchGuidance"
 > & Pick<ClaudeMemoryHookRuntimeOptions, "transcriptReadAttempts" | "transcriptRetryDelayMs">;
 
 type MemoryHookWritebackResult =
@@ -49,6 +50,8 @@ type MemoryHookWritebackResult =
 
 export type MemoryService = {
   recordTurnStart(command: TurnStartCommand): Promise<MemoryHookTurnStartResult>;
+  evaluateSearchGuidance: MemorySearchGuidanceRuntime["evaluate"];
+  searchGuidanceStatus(): { enabled: boolean };
   recordPreCompact(command: CursorPreCompactCommand): Promise<CursorMemoryHookPreCompactResult>;
   writebackTurn(command: WritebackCommand): Promise<MemoryHookWritebackResult>;
   drain(): Promise<void>;
@@ -56,6 +59,7 @@ export type MemoryService = {
 };
 
 export function createMemoryService(options: MemoryServiceOptions = {}): MemoryService {
+  const searchGuidance = createMemorySearchGuidanceRuntime(options);
   const pendingQuotaNotice = createPendingQuotaNoticeRuntime({
     claimQuotaNotice: options.claimQuotaNotice,
     diagnosticLogger: options.diagnosticLogger,
@@ -71,6 +75,7 @@ export function createMemoryService(options: MemoryServiceOptions = {}): MemoryS
   });
   const turnCoordinator = createMemoryTurnCoordinator({
     automaticWriteback: automaticWriteback.enqueue,
+    onTurnMaterialized: searchGuidance.completeTurn,
     now: options.now,
     ttlMs: options.ttlMs,
     maxEntries: options.maxEntries,
@@ -78,35 +83,41 @@ export function createMemoryService(options: MemoryServiceOptions = {}): MemoryS
   });
   const codexHook = createCodexMemoryHookRuntime({
     ...options,
+    searchGuidance,
     pendingQuotaNotice,
     repositoryMemorySession,
     turnCoordinator,
   });
   const claudeHook = createClaudeMemoryHookRuntime({
     ...options,
+    searchGuidance,
     pendingQuotaNotice,
     repositoryMemorySession,
     turnCoordinator,
   });
   const openCodeHook = createOpenCodeMemoryHookRuntime({
     ...options,
+    searchGuidance,
     pendingQuotaNotice,
     repositoryMemorySession,
     turnCoordinator,
   });
   const dshHook = createDshMemoryHookRuntime({
     ...options,
+    searchGuidance,
     repositoryMemorySession,
     turnCoordinator,
   });
   const codeBuddyHook = createCodeBuddyMemoryHookRuntime({
     ...options,
+    searchGuidance,
     pendingQuotaNotice,
     repositoryMemorySession,
     turnCoordinator,
   });
   const workBuddyHook = createCodeBuddyMemoryHookRuntime({
     ...options,
+    searchGuidance,
     client: "workbuddy",
     pendingQuotaNotice,
     repositoryMemorySession,
@@ -114,12 +125,14 @@ export function createMemoryService(options: MemoryServiceOptions = {}): MemoryS
   });
   const traeHook = createTraeMemoryHookRuntime({
     ...options,
+    searchGuidance,
     pendingQuotaNotice,
     repositoryMemorySession,
     turnCoordinator,
   });
   const cursorHook = createCursorMemoryHookRuntime({
     ...options,
+    searchGuidance,
     pendingQuotaNotice,
     repositoryMemorySession,
     turnCoordinator,
@@ -142,6 +155,10 @@ export function createMemoryService(options: MemoryServiceOptions = {}): MemoryS
   }
   let closed = false;
   return {
+    evaluateSearchGuidance: searchGuidance.evaluate,
+    searchGuidanceStatus() {
+      return { enabled: searchGuidance.isEnabled() };
+    },
     async recordPreCompact(command) {
       return await cursorHook.recordPreCompact(command);
     },
@@ -204,6 +221,7 @@ export function createMemoryService(options: MemoryServiceOptions = {}): MemoryS
       cursorHook.close();
       turnCoordinator.close();
       repositoryMemorySession.close();
+      searchGuidance.close();
       automaticWriteback.close();
       pendingQuotaNotice.close();
     },

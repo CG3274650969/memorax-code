@@ -139,6 +139,11 @@ test("combined memory hook records turn start before each emitted developer remi
     let body = "";
     for await (const chunk of req) body += String(chunk);
     const requestBody = JSON.parse(body);
+    if (req.url === "/memory/search-guidance") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: false, reason: "disabled" }));
+      return;
+    }
     requests.push({ path: req.url, body: requestBody });
     if (req.url === "/memory/turn-start") {
       lifecycle.push(`${requestBody.turnId}:start-received`);
@@ -377,6 +382,11 @@ test("Codex Hook retains reminders and Add notices while ignoring legacy retriev
     let body = "";
     for await (const chunk of req) body += String(chunk);
     const requestBody = JSON.parse(body);
+    if (req.url === "/memory/search-guidance") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: false, reason: "disabled" }));
+      return;
+    }
     requests.push({ path: req.url, body: requestBody });
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(req.url === "/memory/turn-start"
@@ -478,6 +488,11 @@ test("Codex duplicate prompts deliver late Add notices without repeating reminde
     let body = "";
     for await (const chunk of req) body += String(chunk);
     const requestBody = JSON.parse(body);
+    if (req.url === "/memory/search-guidance") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: false, reason: "disabled" }));
+      return;
+    }
     requests.push({ path: req.url, body: requestBody });
     const response = req.url === "/memory/turn-start"
       ? await runtime.recordTurnStart(requestBody)

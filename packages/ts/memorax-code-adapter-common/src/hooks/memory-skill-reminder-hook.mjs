@@ -9,7 +9,7 @@ import {
 } from "../config-utils.mjs";
 import {
   isMemorySkillReminderDue,
-  memorySkillReminderContext,
+  codingMemoryReminderContext,
   personalMemoryReminderContext,
   resolveMemorySkillReminderIntervalTurns,
 } from "./memory-skill-reminder-policy.mjs";
@@ -84,18 +84,29 @@ export async function evaluateMemorySkillReminder(options, input) {
     // Backend notices are already claimed and must survive local reminder deduplication.
     if (update.duplicate) return systemMessage ? { systemMessage } : undefined;
     const { memoryReminderDue, supplementalReminderDue } = update;
-    if (!memoryReminderDue && !supplementalReminderDue && !systemMessage) return undefined;
+    const cancelled = () => {
+      if (!options.signal?.aborted) return false;
+      if (supplementalReminderDue) markSupplementalReminderForSession(options, sessionId);
+      return true;
+    };
+    if (cancelled()) return undefined;
+    const searchGuidance = await evaluateSearchGuidance(options, input);
+    if (!memoryReminderDue && !supplementalReminderDue && !systemMessage
+      && searchGuidance?.decision !== "search") return undefined;
+    if (cancelled()) return undefined;
     const cadenceReminderContext = memoryReminderDue
       ? await buildCadenceReminderContext(options, input)
       : undefined;
     const personalMemoryContext = supplementalReminderDue || (memoryReminderDue && update.turnCount === 1)
       ? await buildPersonalMemoryContext(options, input)
       : undefined;
+    if (cancelled()) return undefined;
     const reminderContext = stringOption(combinedReminderContext(options, {
       memoryReminderDue,
       supplementalReminderDue,
-    }, cadenceReminderContext, personalMemoryContext));
+    }, cadenceReminderContext, personalMemoryContext, searchGuidance));
     const triggers = [
+      ...(searchGuidance?.ok === true ? ["search_guidance"] : []),
       ...(memoryReminderDue ? ["cadence"] : []),
       ...(supplementalReminderDue ? ["post_compaction"] : []),
     ];
@@ -185,14 +196,28 @@ async function buildPersonalMemoryContext(options, input) {
   }
 }
 
-function combinedReminderContext(options, due, cadenceReminderContext, personalMemoryContext) {
+async function evaluateSearchGuidance(options, input) {
+  if (typeof options.evaluateSearchGuidance !== "function") return undefined;
+  try {
+    const result = await options.evaluateSearchGuidance(input);
+    return result?.ok === true && ["search", "skip"].includes(result.decision) ? result : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function combinedReminderContext(options, due, cadenceReminderContext, personalMemoryContext, searchGuidance) {
   const contexts = [];
-  if (due.memoryReminderDue) contexts.push(memorySkillReminderContext(options.memorySkillInvocation));
-  if (due.supplementalReminderDue || personalMemoryContext) {
+  if (due.memoryReminderDue || searchGuidance?.ok === true) {
+    const codingContext = codingMemoryReminderContext(searchGuidance, options.memorySkillInvocation);
+    if (codingContext) contexts.push(codingContext);
+  }
+  if (due.supplementalReminderDue || personalMemoryContext
+    || (due.memoryReminderDue && searchGuidance?.ok === true)) {
     const additionalReminderContext = stringOption(options.additionalReminderContext);
     if (additionalReminderContext) contexts.push(additionalReminderContext);
   }
-  if (personalMemoryContext || (due.memoryReminderDue && cadenceReminderContext)) {
+  if (personalMemoryContext || (due.memoryReminderDue && cadenceReminderContext) || searchGuidance?.decision === "search") {
     const memoryImpactContext = stringOption(options.memoryImpactContext);
     if (memoryImpactContext) contexts.push(memoryImpactContext);
   }

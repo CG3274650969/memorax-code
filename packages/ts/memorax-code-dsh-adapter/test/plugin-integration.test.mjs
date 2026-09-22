@@ -7,6 +7,7 @@ import {
   isMemorySkillReminderDue,
   MEMORY_IMPACT_REMINDER_CONTEXT,
   memorySkillReminderContext,
+  memorySearchGuidanceContext,
   personalMemoryReminderContext,
 } from "../../memorax-code-adapter-common/src/hooks/memory-skill-reminder-policy.mjs";
 import { createDshUserMessage } from "../src/dsh-message.mjs";
@@ -1149,3 +1150,114 @@ function mockContext(runtime) {
   };
   return context;
 }
+
+test("Jev judges every new DSH Turn without changing personal-memory cadence", async () => {
+  const calls = [];
+  const turnStarts = [];
+  const reminders = [];
+  const personalContextCalls = [];
+  const backend = reminderBackend(reminders);
+  backend.recordTurnStart = async (command) => {
+    turnStarts.push(command);
+    return { ok: true, repoMemoryWorktree: "/workspace/project" };
+  };
+  backend.evaluateSearchGuidance = async (command, request) => {
+    assert.ok(request.signal instanceof AbortSignal);
+    calls.push(command);
+    if (command.turn === 4) throw new Error("Guidance unavailable");
+    if (command.turn === 6) return { ok: false, reason: "timeout" };
+    return { ok: true, decision: command.turn === 2 ? "search" : "skip" };
+  };
+  const ctx = mockContext({ flush: async () => true, readFrom: async () => undefined });
+  registerMemoraxCodePlugin(ctx, pluginDependencies({
+    backendClient: backend, searchGuidanceContext: memorySearchGuidanceContext("/memorax-code"),
+    loadPersonalContext: async (input) => {
+      personalContextCalls.push(input);
+      return {
+        ...(input.includeProfile ? { profileContext: "Profile" } : {}),
+        ...(input.includeProcedure ? { procedureContext: "Procedure" } : {}),
+      };
+    },
+  }));
+  const session = topLevelSession();
+  const first = await runTurnStartStep(ctx, session, 1, session.events.length);
+  assertContext(first, PERSONAL_MEMORY_REMINDER_CONTEXT, MEMORY_IMPACT_REMINDER_CONTEXT, "Profile", "Procedure");
+  const second = await runTurnStartStep(ctx, session, 2, session.events.length);
+  assertContext(second, memorySearchGuidanceContext("/memorax-code"), MEMORY_IMPACT_REMINDER_CONTEXT);
+  const searchContext = second.messages.at(-1).content[0].text;
+  assert.match(searchContext, /Jev selected Coding Memory search/);
+  assert.match(searchContext, /\/memorax-code/);
+  assert.match(searchContext, /references\/memorax-search\.md/);
+  assert.doesNotMatch(searchContext, /search --query|without rereading|\$memorax-code/);
+  for (const step of [1, 2]) {
+    const duplicate = await ctx.waterfall("agent/pre-step", preStep(session, 2, step), enterDecision());
+    assert.equal(duplicate.messages.length, 1);
+  }
+  assert.equal(calls.length, 2, "duplicate prompts and internal steps must not reevaluate Jev");
+  for (let turn = 3; turn <= 6; turn += 1) {
+    const result = await runTurnStartStep(ctx, session, turn, session.events.length);
+    if (turn < 6) assert.equal(result.messages.length, 1, "skip and failure must not inject an off-cadence router");
+    else assertContext(result, MEMORY_REMINDER_CONTEXT, MEMORY_IMPACT_REMINDER_CONTEXT, "Procedure");
+    if (turn === 3) {
+      ctx.emit("session/event", session, event("compaction/end", session.events.length, {}));
+      const restored = await ctx.waterfall("agent/pre-step", preStep(session, turn, 2), enterDecision());
+      assertContext(restored, PERSONAL_MEMORY_REMINDER_CONTEXT, MEMORY_IMPACT_REMINDER_CONTEXT, "Profile");
+      assert.equal(calls.length, 3, "internal compaction recovery must not reevaluate Jev");
+    }
+  }
+  assert.deepEqual(calls, turnStarts, "guidance reuses each registered Turn command exactly once");
+  assert.deepEqual(calls.map(({ turn }) => turn), [1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(personalContextCalls.map(({ includeProfile, includeProcedure }) => [includeProfile, includeProcedure]), [
+    [true, true], [true, false], [false, true],
+  ]);
+  assert.deepEqual(reminders.map(({ triggers }) => triggers), [
+    ["cadence", "search_guidance"], ["search_guidance"], ["post_compaction"], ["cadence"],
+  ]);
+  await ctx.dispose();
+});
+
+test("DSH retains only accepted reminder cadence across recreation while Jev judges every Turn", async () => {
+  const calls = [];
+  const acceptedCadence = new Map();
+  const reminderCadence = {
+    read: (id) => acceptedCadence.get(id),
+    commit: (id, value) => acceptedCadence.set(id, value),
+  };
+  const backend = reminderBackend([]);
+  backend.evaluateSearchGuidance = async (command) => {
+    calls.push(command);
+    return { ok: true, decision: "skip" };
+  };
+  const dependencies = pluginDependencies({
+    backendClient: backend, reminderCadence, searchGuidanceContext: memorySearchGuidanceContext("/memorax-code"),
+    loadPersonalContext: async ({ includeProfile, includeProcedure }) => ({
+      ...(includeProfile ? { profileContext: "Profile" } : {}),
+      ...(includeProcedure ? { procedureContext: "Procedure" } : {}),
+    }),
+  });
+  const runtime = { acceptMessages: false, flush: async () => true, readFrom: async () => undefined };
+  let ctx = mockContext(runtime);
+  registerMemoraxCodePlugin(ctx, dependencies);
+  const session = topLevelSession();
+  await runTurnStartStep(ctx, session, 1, 0);
+  assert.equal(acceptedCadence.get(session.id), undefined, "unaccepted context must not advance reminder cadence");
+  ctx.emit("session/event", session, event("turn/end", session.events.length, { turn: 1, reason: { kind: "aborted" } }));
+  runtime.acceptMessages = true;
+  const acceptedStartSeq = session.events.length;
+  await runTurnStartStep(ctx, session, 2, acceptedStartSeq);
+  assert.deepEqual(acceptedCadence.get(session.id), { startSeq: acceptedStartSeq, turn: 2 });
+  await ctx.dispose();
+  ctx = mockContext(runtime);
+  registerMemoraxCodePlugin(ctx, dependencies);
+  for (let turn = 3; turn <= 7; turn += 1) {
+    const startSeq = session.events.length;
+    const result = await runTurnStartStep(ctx, session, turn, startSeq);
+    if (turn === 3) assertContext(result, MEMORY_IMPACT_REMINDER_CONTEXT, "Profile", "Procedure");
+    else if (turn < 7) assert.equal(result.messages.length, 1);
+    else assertContext(result, PERSONAL_MEMORY_REMINDER_CONTEXT, MEMORY_IMPACT_REMINDER_CONTEXT, "Procedure");
+    assert.deepEqual(acceptedCadence.get(session.id), turn < 7
+      ? { startSeq: acceptedStartSeq, turn: 2 } : { startSeq, turn: 7 });
+  }
+  assert.deepEqual(calls.map(({ turn }) => turn), [1, 2, 3, 4, 5, 6, 7]);
+  await ctx.dispose();
+});

@@ -28,6 +28,7 @@ export type MemoryTurnStart = MemoryTurnKey & Readonly<{
   cwd?: string;
   workspaceKind?: string;
   transcriptPath?: string;
+  databasePath?: string;
   eventStartSeq?: number;
   createdAt: number;
   sessionTurnIndex?: number;
@@ -63,13 +64,22 @@ export type MemoryTurnCompletion = Readonly<AutomaticMemoryWritebackTiming & {
   resolveRepositoryMemory: () => Promise<ConfiguredRepositoryMemoryResult>;
   userText: string;
   assistantText: string;
+  searchAssistantText?: string;
   writeback: Omit<AutomaticMemoryWritebackOptions, "userText" | "assistantText" | "repositoryScope">;
+}>;
+
+export type MemoryMaterializedTurn = Readonly<{
+  key: MemoryTurnKey;
+  repositoryScope: RepositoryMemoryScope;
+  userText: string;
+  assistantText: string;
 }>;
 
 export type MemoryTurnDiscardReason = "interrupted" | "rolled_back";
 
 export type MemoryTurnCoordinatorOptions = {
   automaticWriteback: AutomaticMemoryWritebackEnqueue;
+  onTurnMaterialized?: (turn: MemoryMaterializedTurn) => void;
   now?: () => number;
   ttlMs?: number;
   maxEntries?: number;
@@ -113,6 +123,7 @@ export function createMemoryTurnCoordinator(options: MemoryTurnCoordinatorOption
         cwd: input.cwd,
         workspaceKind: input.workspaceKind,
         transcriptPath: input.transcriptPath,
+        databasePath: input.databasePath,
         eventStartSeq: input.eventStartSeq,
         createdAt: input.createdAt,
         sessionTurnIndex: input.sessionTurnIndex,
@@ -185,6 +196,14 @@ export function createMemoryTurnCoordinator(options: MemoryTurnCoordinatorOption
         // First-cwd binding was validated by the session resolver; preserve this
         // same Turn's QA while adopting the newly established physical root.
         repositoryScope = currentScope;
+      }
+      try {
+        options.onTurnMaterialized?.({
+          key: input.key, repositoryScope, userText: input.userText,
+          assistantText: input.searchAssistantText ?? input.assistantText,
+        });
+      } catch {
+        // Optional search guidance cannot change automatic Add acceptance.
       }
       const userTimestamp = parseNativeMessageTimestamp(input.userTimestamp);
       const assistantTimestamp = parseNativeMessageTimestamp(input.assistantTimestamp);

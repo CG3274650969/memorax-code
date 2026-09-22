@@ -26,12 +26,12 @@ test("Claude plugin manifest installs backend, turn-start, and writeback Hooks",
     "node \"${CLAUDE_PLUGIN_ROOT}/hooks/runtime-hook.mjs\" memory-cli-session",
   ), true);
   assert.equal(commands.UserPromptSubmit.includes(
-    "node \"${CLAUDE_PLUGIN_ROOT}/hooks/runtime-hook.mjs\" memory-turn",
+    "node \"${CLAUDE_PLUGIN_ROOT}/hooks/runtime-hook.mjs\" memory-skill-reminder",
   ), true);
   assert.equal(commands.Stop.includes(
     "node \"${CLAUDE_PLUGIN_ROOT}/hooks/runtime-hook.mjs\" memory-turn",
   ), true);
-  assert.equal(manifest.hooks.UserPromptSubmit[0].hooks[1].timeout, 15);
+  assert.equal(manifest.hooks.UserPromptSubmit[0].hooks[1].timeout, 20);
   assert.equal(manifest.hooks.Stop[0].hooks[1].timeout, 10);
   assert.match(runtime, /TURN_START_BACKEND_TIMEOUT_MS = 12_000/);
   assert.match(runtime, /DEFAULT_BACKEND_TIMEOUT_MS = 5_000/);

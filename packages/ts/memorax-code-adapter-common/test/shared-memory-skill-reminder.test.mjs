@@ -5,9 +5,26 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { evaluateMemorySkillReminder, markSupplementalReminderForSession } from "../src/hooks/memory-skill-reminder-hook.mjs";
 import {
+  codingMemoryReminderContext,
   isMemorySkillReminderDue,
   resolveMemorySkillReminderIntervalTurns,
 } from "../src/hooks/memory-skill-reminder-policy.mjs";
+
+test("Jev search guidance routes through the client's canonical Search reference", () => {
+  for (const invocation of [undefined, "/memorax-code-claude-adapter:memorax-code", "/memorax-code", "the `memorax-code` skill"]) {
+    const context = codingMemoryReminderContext({ ok: true, decision: "search" }, invocation);
+    assert.ok(context.includes(invocation ?? "$memorax-code"));
+    assert.match(context, /references\/memorax-search\.md/);
+    assert.match(context, /completely in a standalone tool call/);
+    assert.match(context, /before constructing queries or executing Search/);
+    assert.match(context, /Query Workflow/);
+    assert.doesNotMatch(context, /search --query|without rereading|Use one focused natural-language query/);
+    assert.equal(codingMemoryReminderContext({ ok: true, decision: "skip" }, invocation), undefined);
+    const fallback = codingMemoryReminderContext({ ok: false, reason: "timeout" }, invocation);
+    assert.match(fallback, /proactively invoke/);
+    assert.ok(fallback.includes(invocation ?? "$memorax-code"));
+  }
+});
 
 test("shared reminder interval resolves environment, configuration, and defaults", async (t) => {
   const configured = "[memory.skill_reminder]\ninterval_turns = 2\n";
@@ -152,4 +169,60 @@ test("duplicate reminders preserve independent notices and pending compaction co
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("Jev judges each unique prompt while fallback and personal context keep their own cadence", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "memorax-code-jev-reminder-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const decisions = [];
+  let profiles = 0;
+  let procedures = 0;
+  const options = {
+    memoraxCodeHome: root, adapterDir: "shared-contract", runtime: "shared-contract",
+    supplementalReminderAfterCompact: true,
+    additionalReminderContext: "Personal memory routing remains available.",
+    memoryImpactContext: "Memory attribution.",
+    buildPersonalMemoryContext: async () => { profiles += 1; return "Profile context."; },
+    buildCadenceReminderContext: async () => { procedures += 1; return "Procedure context."; },
+    evaluateSearchGuidance: async (input) => {
+      decisions.push(input.turnId);
+      if (["turn-5", "turn-6"].includes(input.turnId)) throw new Error("unavailable");
+      return { ok: true, decision: ["turn-2", "turn-3", "turn-9"].includes(input.turnId) ? "search" : "skip" };
+    },
+  };
+  const input = (turn) => ({ sessionId: "session", turnId: "turn-" + turn, prompt: "Current request" });
+  const first = await evaluateMemorySkillReminder(options, input(1));
+  assert.doesNotMatch(first.additionalContext, /proactively invoke|references\/memorax-search\.md/);
+  assert.match(first.additionalContext, /Personal memory routing/);
+  assert.match(first.additionalContext, /Profile context/);
+  assert.match(first.additionalContext, /Procedure context/);
+  assert.match(first.additionalContext, /Memory attribution/);
+  assert.deepEqual(first.reminder.triggers, ["search_guidance", "cadence"]);
+  assert.deepEqual(await evaluateMemorySkillReminder({ ...options, systemMessage: "Quota notice." }, input(1)), { systemMessage: "Quota notice." });
+  markSupplementalReminderForSession(options, "session");
+  const compact = await evaluateMemorySkillReminder(options, input(2));
+  assert.match(compact.additionalContext, /Profile context/);
+  assert.match(compact.additionalContext, /references\/memorax-search\.md/);
+  assert.doesNotMatch(compact.additionalContext, /Procedure context|proactively invoke/);
+  assert.deepEqual(compact.reminder.triggers, ["search_guidance", "post_compaction"]);
+  for (let turn = 3; turn <= 11; turn += 1) {
+    const result = await evaluateMemorySkillReminder(options, input(turn));
+    if (turn === 3 || turn === 9) {
+      assert.match(result.additionalContext, /Jev selected Coding Memory search/);
+      assert.match(result.additionalContext, /references\/memorax-search\.md/);
+      assert.match(result.additionalContext, /Memory attribution/);
+      assert.doesNotMatch(result.additionalContext, /Personal memory routing|Procedure context|proactively invoke|Profile context/);
+      assert.deepEqual(result.reminder.triggers, ["search_guidance"]);
+    } else if (turn === 6) {
+      assert.match(result.additionalContext, /proactively invoke/);
+      assert.match(result.additionalContext, /Procedure context/);
+      assert.deepEqual(result.reminder.triggers, ["cadence"]);
+    } else if (turn === 11) {
+      assert.match(result.additionalContext, /Personal memory routing|Procedure context/);
+      assert.doesNotMatch(result.additionalContext, /proactively invoke|references\/memorax-search\.md|Profile context/);
+    } else assert.equal(result, undefined);
+  }
+  assert.deepEqual(decisions, Array.from({ length: 11 }, (_, index) => "turn-" + (index + 1)));
+  assert.equal(profiles, 2, "only initial and post-compaction prompts load Profile context");
+  assert.equal(procedures, 3, "Procedure context retains turns 1, 6, and 11");
 });

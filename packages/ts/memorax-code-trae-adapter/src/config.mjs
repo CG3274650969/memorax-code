@@ -503,7 +503,7 @@ function updateManagedHooks(path, command, enabled) {
       const existing = Array.isArray(manifest.hooks[event]) ? manifest.hooks[event] : [];
       const filtered = existing.flatMap((group) => filterManagedGroup(group));
       if (enabled) {
-        filtered.push({ hooks: [{ type: "command", command, timeout: event === "SessionStart" ? 35 : 15 }] });
+        filtered.push({ hooks: [{ type: "command", command, timeout: event === "SessionStart" ? 35 : event === "UserPromptSubmit" ? 20 : 15 }] });
       }
       if (filtered.length > 0) manifest.hooks[event] = filtered;
       else delete manifest.hooks[event];

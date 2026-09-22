@@ -211,7 +211,7 @@ export type WritebackCommand =
   | TraeWritebackCommand
   | CursorWritebackCommand;
 
-export type SkillReminderTrigger = "cadence" | "post_compaction";
+export type SkillReminderTrigger = "cadence" | "post_compaction" | "search_guidance";
 
 export type CodexSkillReminderCommand = MemoryHookCommandBase<"codex"> & Readonly<{
   turnId: string;
@@ -672,7 +672,7 @@ function skillReminderTriggers(value: unknown): SkillReminderTrigger[] | undefin
   if (!Array.isArray(value) || value.length === 0) return undefined;
   const triggers: SkillReminderTrigger[] = [];
   for (const trigger of value) {
-    if (trigger !== "cadence" && trigger !== "post_compaction") return undefined;
+    if (trigger !== "cadence" && trigger !== "post_compaction" && trigger !== "search_guidance") return undefined;
     if (!triggers.includes(trigger)) triggers.push(trigger);
   }
   return triggers;

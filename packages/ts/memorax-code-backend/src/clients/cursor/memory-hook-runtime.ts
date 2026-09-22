@@ -349,6 +349,7 @@ export function createCursorMemoryHookRuntime(
           const result = await memory.recordTurnStart({
             sessionId: command.sessionId, clientTurnId: command.turnId,
             cwd: command.cwd, workspaceKind: command.workspaceKind, transcriptPath: command.transcriptPath,
+            databasePath: command.databasePath,
             createdAt, traceContext, prompt: command.prompt, repositoryMemory,
             onTurnRegistered(metadata) {
               turn.metadata = {

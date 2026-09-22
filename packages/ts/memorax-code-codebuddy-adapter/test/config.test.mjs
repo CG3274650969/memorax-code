@@ -261,7 +261,7 @@ test("installs and removes an isolated CodeBuddy plugin registry entry", async (
   assert.equal(settings.enabledPlugins["memorax-code-codebuddy-adapter@memorax-code-local"], true);
   assert.deepEqual(settings.hooks, {
     SessionStart: userSessionStart,
-    UserPromptSubmit: [userPromptGroup, { hooks: [{ type: "command", command: expectedPromptCommand, timeout: 15 }] }],
+    UserPromptSubmit: [userPromptGroup, { hooks: [{ type: "command", command: expectedPromptCommand, timeout: 20 }] }],
   });
   // Same-version installs replace both old plugin copies and keep one global prompt Hook.
   for (const installedRoot of [pluginRoot, codeBuddyInstallPath(home)]) {

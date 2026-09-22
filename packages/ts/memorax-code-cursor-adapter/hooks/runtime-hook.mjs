@@ -19,6 +19,7 @@ const {
   personalMemoryReminderContext,
   MEMORY_IMPACT_REMINDER_CONTEXT,
 } = await import(pathToFileURL(join(commonRoot, "hooks", "memory-skill-reminder-policy.mjs")).href);
+const { requestMemorySearchGuidance, readMemorySearchGuidanceEnabled } = await import(pathToFileURL(join(commonRoot, "hooks", "memory-search-guidance.mjs")).href);
 const { evaluateMemorySkillReminder, markSupplementalReminderForSession } = await import(pathToFileURL(join(commonRoot, "hooks", "memory-skill-reminder-hook.mjs")).href);
 const { buildRepoUserProfilePreferencesContext } = await import(pathToFileURL(join(commonRoot, "repo-memory", "repo-user-profile-context.mjs")).href);
 const { buildRepoProcedureMemoryContext } = await import(pathToFileURL(join(commonRoot, "repo-memory", "repo-procedure-memory-context.mjs")).href);
@@ -93,6 +94,7 @@ const identity = {
   ...(transcriptPath ? { transcriptPath } : {}),
 };
 if (event === "sessionStart") {
+  const guidedSearchEnabled = await readMemorySearchGuidanceEnabled({ memoraxCodeHome: home });
   // Cursor guarantees these variables to subsequent Hooks, not shell tools.
   // Keep an explicit command-environment instruction in the native context.
   process.stdout.write(`${JSON.stringify({
@@ -101,7 +103,7 @@ if (event === "sessionStart") {
       MEMORAX_CODE_MEMORY_CLI_TRACE_SESSION_ID: sessionId,
     },
     additional_context: [
-      memorySkillReminderContext("the `memorax-code` skill"),
+      ...(!guidedSearchEnabled ? [memorySkillReminderContext("the `memorax-code` skill")] : []),
       personalMemoryReminderContext("the `memorax-code` skill"),
       MEMORY_IMPACT_REMINDER_CONTEXT,
       "Use the shared skill's Repo Memory authority and workspace rules before reading or writing repository memory.",
@@ -173,6 +175,9 @@ async function evaluateReminder(turnStart) {
     adapterDir: "cursor", runtime: "cursor", memoraxCodeHome: home,
     debugEnv: "MEMORAX_CODE_CURSOR_HOOK_DEBUG",
     memorySkillInvocation: "the `memorax-code` skill",
+    evaluateSearchGuidance: () => requestMemorySearchGuidance({
+      body: { ...identity, prompt: input.prompt }, memoraxCodeHome: home,
+    }),
     additionalReminderContext: personalMemoryReminderContext("the `memorax-code` skill"),
     memoryImpactContext: MEMORY_IMPACT_REMINDER_CONTEXT,
     remindOnFirstTurn: true,

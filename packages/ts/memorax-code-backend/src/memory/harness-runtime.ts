@@ -30,6 +30,7 @@ import {
   type MemoryTurnState,
   type MemoryTurnWritebackResult,
 } from "./turn-coordinator.js";
+import type { MemorySearchGuidanceRuntime } from "./search-guidance.js";
 import type { TraceContext } from "../trace/context.js";
 import { recordTraceEvent, traceTurnEventId, writeCurrentTraceTurn } from "../trace/store.js";
 
@@ -48,6 +49,7 @@ export type HarnessMemoryRuntimeOptions = {
   pendingQuotaNotice?: PendingQuotaNoticeRuntime;
   repositoryMemorySession?: RepositoryMemorySessionRuntime;
   turnCoordinator?: MemoryTurnCoordinator;
+  searchGuidance?: MemorySearchGuidanceRuntime;
 };
 
 export type HarnessMemoryDefinition = Readonly<{
@@ -81,6 +83,7 @@ export type HarnessTurnCompletion = Readonly<AutomaticMemoryWritebackTiming & {
   metadata?: MemoryTurnState;
   userText: string;
   assistantText: string;
+  searchAssistantText?: string;
   traceContext?: TraceContext;
   resolveRepositoryMemory: () => Promise<ConfiguredRepositoryMemoryResult>;
 }>;
@@ -111,6 +114,7 @@ export function createHarnessMemoryRuntime(
       });
   const turnCoordinator = options.turnCoordinator ?? createMemoryTurnCoordinator({
     automaticWriteback: automaticWriteback!.enqueue,
+    onTurnMaterialized: options.searchGuidance?.completeTurn,
     now,
     ttlMs: options.ttlMs,
     maxEntries: options.maxEntries,
@@ -157,6 +161,7 @@ export function createHarnessMemoryRuntime(
       if (turn.clientTurnId) {
         const state = turnCoordinator.recordTurnStart({ ...turn, client: definition.client, clientTurnId: turn.clientTurnId, repositoryMemory });
         onTurnRegistered?.(state);
+        options.searchGuidance?.registerTurn(state, prompt);
       }
       if (diagnosticFields) {
         options.diagnosticLogger?.(`${definition.diagnosticPrefix}.turn_start`, {
@@ -208,6 +213,7 @@ export function createHarnessMemoryRuntime(
         resolveRepositoryMemory: input.resolveRepositoryMemory,
         userText: input.userText,
         assistantText: input.assistantText,
+        searchAssistantText: input.searchAssistantText,
         userTimestamp: input.userTimestamp,
         assistantTimestamp: input.assistantTimestamp,
         userTimestampSource: input.userTimestampSource,

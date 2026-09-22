@@ -23,6 +23,22 @@ export function memorySkillReminderContext(memorySkillInvocation) {
   return `MemoraX Code reminder: proactively invoke ${invocation} whenever coding memory might help, even when uncertain; follow the skill's router to decide whether any memory operation is needed. Also use ${invocation} for repository-scoped personal memory, and classify the authority before reading or writing.`;
 }
 
+export function memorySearchGuidanceContext(memorySkillInvocation) {
+  const invocation = nonEmptyString(memorySkillInvocation) ?? DEFAULT_MEMORY_SKILL_INVOCATION;
+  return [
+    "MemoraX Code: Jev selected Coding Memory search for this task.",
+    `Use ${invocation} for its Coding Memory Search operation.`,
+    "Read the Skill's references/memorax-search.md completely in a standalone tool call and wait for its full contents before constructing queries or executing Search.",
+    "Follow that reference's Query Workflow, workspace and platform rules, failure handling, and result-use instructions to search for the current task.",
+  ].join(" ");
+}
+
+export function codingMemoryReminderContext(result, memorySkillInvocation) {
+  if (result?.ok === true && result.decision === "search") return memorySearchGuidanceContext(memorySkillInvocation);
+  if (result?.ok === true && result.decision === "skip") return undefined;
+  return memorySkillReminderContext(memorySkillInvocation);
+}
+
 export function personalMemoryReminderContext(memorySkillInvocation) {
   const invocation = nonEmptyString(memorySkillInvocation) ?? DEFAULT_MEMORY_SKILL_INVOCATION;
   return [

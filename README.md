@@ -288,6 +288,14 @@ there is no second writeback confirmation. Search runs when the agent uses the
 Skill or you invoke the CLI. Hooks provide local memory context and reminders
 without issuing Search requests.
 
+Optional [Jev configuration](docs/configuration.md#jev-provider-configuration)
+lets a separate TypeSafe model judge each eligible distinct user request. When
+Search is useful, the agent reads the `memorax-code` Skill's Search reference
+and follows its query and execution guidance. It sends bounded current-request
+and previous-turn text to TypeSafe, uses your Jev key, and is disabled by default.
+Failures fall back to the normal Skill reminder cadence; the agent still
+executes Search.
+
 Local trace capture is enabled by default for supported clients. Depending on
 client capabilities, retained traces under `MEMORAX_CODE_HOME` may contain
 prompts, responses, recalled memory, reminder text, and local paths. Use the

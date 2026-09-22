@@ -242,6 +242,12 @@ MemoraX Code 会先比较含义：语义相同的请求不重复写入；长期�
 不会再出现第二次写回确认。Search 由 Agent 通过 Skill 主动调用，或由您直接运行 CLI；
 Hook 继续提供本地记忆上下文与提醒，不发起 Search 请求。
 
+可选的 [Jev 配置](docs/configuration.md#jev-provider-configuration)会通过 TypeSafe 模型，
+对每个符合条件的新用户请求判断是否需要 Search；需要时，Agent 先读取 `memorax-code` Skill
+中的 Search 指引，再按照其中的规则构造查询并执行搜索。
+该功能使用您配置的 Jev Key，默认关闭；开启后会将限长的本轮请求与上一轮交互文本
+发送给 TypeSafe。调用失败时按原有周期提供 Skill 提醒，Search 仍由 Agent 执行。
+
 受支持客户端的本地 trace 默认开启。根据客户端能力，`MEMORAX_CODE_HOME` 下保留的 trace
 可能包含用户指令、Agent 回复、召回的 Memory、提醒文本和本地路径。可通过
 [本地 trace 配置](docs/configuration.md#local-traces)改为仅记录元数据，或关闭对应客户端的 trace。

@@ -79,6 +79,11 @@ const rules = [
     forbidden: ["node:child_process", "node:fs"],
   },
   {
+    name: "search guidance uses materialized context without native parsing or retained trace authority",
+    importers: ["memory/search-guidance.ts"],
+    forbidden: ["clients/", "trace/", "node:fs", "node:fs/promises", "app/", "lifecycle/", "transport/"],
+  },
+  {
     name: "request-time memory production does not depend on adapter lifecycle",
     importers: [
       "memory/automatic-writeback.ts",
@@ -86,6 +91,7 @@ const rules = [
       ...clientMemoryRuntimes,
       ...nativeReaders,
       "memory/turn-coordinator.ts",
+      "memory/search-guidance.ts",
       "memory/service.ts",
       "memory/writeback-buffer.ts",
       "memory/writeback-chunk.ts",

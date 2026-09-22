@@ -161,6 +161,8 @@ test("Trae reminder commands preserve Hook correlation without foreign transcrip
   const { prompt, ...identity } = start;
   const command = { ...identity, content: "Use the memorax-code skill.", triggers: ["cadence"] };
   assert.deepEqual(parseSkillReminderCommand(command), { ok: true, command });
+  const guided = { ...command, triggers: ["search_guidance"] };
+  assert.deepEqual(parseSkillReminderCommand(guided), { ok: true, command: guided });
   assert.deepEqual(parseSkillReminderCommand({ ...command, transcriptPath: "/tmp/trae.jsonl" }), INVALID);
 });
 
