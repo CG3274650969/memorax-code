@@ -8,11 +8,33 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { parse } from "../../../ts/memorax-code-backend/node_modules/smol-toml/dist/index.js";
+import { appendMissingJevConfig } from "../../../ts/memorax-code-adapter-common/src/jev-config-defaults.mjs";
 import {
   CONFIG_UPDATE_WARNING,
   updateConfigFileAtomically,
   updateConfigFileWithLock,
 } from "../../../ts/memorax-code-adapter-common/src/memorax-code-config-file.mjs";
+
+test("Jev defaults preserve existing definitions and append missing defaults without rewriting text", () => {
+  for (const original of [
+    '[jev]\nenabled = true\napi_key = "existing-key"\nfuture_option = "keep"\n',
+    '[jev]\nenabled = false # Intentionally disabled.\n',
+    '[jev]\napi_key = "existing-key"\n',
+    'jev = { enabled = true, api_key = "existing-key" }\n',
+    'jev.enabled = true\njev.api_key = "existing-key"\n',
+    '["jev"]\nenabled = true\n',
+    'jev = "invalid but user-owned"\n',
+  ]) {
+    assert.equal(appendMissingJevConfig(original, parse(original)), original);
+  }
+  for (const original of ["", '[memorax]\napi_key = "keep"', '# Keep comments.\r\n[memorax]\r\napi_key = "keep"\r\n']) {
+    const updated = appendMissingJevConfig(original, parse(original));
+    assert.ok(updated.startsWith(original));
+    assert.deepEqual(parse(updated), { ...parse(original), jev: { enabled: false, api_key: "" } });
+    assert.equal(appendMissingJevConfig(updated, parse(updated)), updated);
+    if (original.includes("\r\n")) assert.doesNotMatch(updated, /(?<!\r)\n/);
+  }
+});
 
 test("existing-only config migration does not create an absent home", async () => {
   const root = await mkdtemp(join(tmpdir(), "memorax-code-config-absent-"));

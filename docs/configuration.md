@@ -660,11 +660,9 @@ When an adapter reports cancellation before reminder delivery, pending cadence
 and first-turn personal context can be delivered on a retry or the next eligible
 prompt. Retrying the same Turn does not advance the reminder count again.
 
-Fresh setup writes the following defaults. For an existing `config.toml`,
-setup, update reconciliation, and managed Backend start append the same block
-only when the parsed TOML root has no `jev` entry. npm postinstall also reconciles
-an existing file after package-transition handling, including upgrades while
-the Backend is stopped. Restoration uses the same Backend-start behavior.
+Fresh setup includes these defaults. Setup and npm postinstall append them to
+existing configuration only when the parsed TOML root has no `jev` entry.
+Postinstall runs this after package-transition handling, even if the Backend is stopped.
 
 ```toml
 [jev]
@@ -672,15 +670,11 @@ enabled = false
 api_key = ""
 ```
 
-Backfill preserves any existing `jev` definition exactly, including partial
-tables, inline tables, dotted or quoted keys, and unknown fields; it does not
-fill missing fields within an existing definition. It preserves the rest of
-the file, comments, existing line endings, and POSIX file modes, and repeated
-runs make no further changes. These writes share a configuration lock and
-atomic replacement. A fresh npm installation does not create the state home
-or `config.toml`, or start the Backend; setup creates the initial configuration.
-Installing with `--ignore-scripts` skips postinstall backfill; the next setup
-or Backend start applies it.
+Existing `jev` definitions, including partial definitions, are left unchanged.
+The shared locked atomic writer preserves unrelated text, line endings, and
+POSIX file modes; repeated runs make no further changes. Fresh npm installation
+creates no state or configuration; backfill itself does not start the Backend.
+With `--ignore-scripts`, backfill waits until the next setup.
 
 | Field | Environment override | Fallback |
 | --- | --- | --- |

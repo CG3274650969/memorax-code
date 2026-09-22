@@ -1,9 +1,10 @@
 import { readFileSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parse } from "smol-toml";
-import { updateConfigFileWithLock } from "../../../memorax-code-adapter-common/src/memorax-code-config-file.mjs";
-import { appendMissingJevConfig, DEFAULT_JEV_CONFIG_TEXT } from "../../../memorax-code-adapter-common/src/jev-config-defaults.mjs";
+import { ensurePrivateConfigDirectory } from "../../../memorax-code-adapter-common/src/memorax-code-config-file.mjs";
+import { DEFAULT_JEV_CONFIG_TEXT } from "../../../memorax-code-adapter-common/src/jev-config-defaults.mjs";
 import {
   MEMORAX_DEFAULT_BASE_URL,
   MEMORAX_DEFAULT_MEMORY_OUTPUT_LANGUAGE,
@@ -225,15 +226,18 @@ export async function seedMissingMemoraxCodeConfig(
   memoraxCodeHome = defaultMemoraxCodeHome(process.env),
 ): Promise<boolean> {
   const path = memoraxCodeConfigPath(memoraxCodeHome);
-  const result = updateConfigFileWithLock({
-    path,
-    defaultText: renderDefaultMemoraxCodeConfig(),
-    transform: appendMissingJevConfig,
-    parseToml: parse,
-    warn: () => {},
-  });
-  if (result === "failed") throw new Error("failed to safely update MemoraX Code config");
-  return result === "created";
+  ensurePrivateConfigDirectory(path);
+  try {
+    await writeFile(path, renderDefaultMemoraxCodeConfig(), {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+    return true;
+  } catch (error) {
+    if (isNodeError(error) && error.code === "EEXIST") return false;
+    throw error;
+  }
 }
 
 export function loadMemoraxCodeConfig(

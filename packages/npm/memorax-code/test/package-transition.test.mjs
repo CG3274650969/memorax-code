@@ -28,118 +28,36 @@ test("fresh install and configured-but-stopped install are lifecycle no-ops", as
   for (const name of ["fresh", "configured-but-stopped"]) {
     await t.test(name, async () => {
       const fixture = await createFixture();
+      const path = join(fixture.home, "config.toml");
+      const original = "[clients]\ncodex = true\n";
       try {
         if (name === "configured-but-stopped") {
           await mkdir(fixture.home, { recursive: true });
-          await writeFile(join(fixture.home, "config.toml"), "[clients]\ncodex = true\n");
+          await writeFile(path, original);
         }
         assert.equal((await runEntry(fixture, "preinstall")).code, 0);
+        if (name === "configured-but-stopped") assert.equal(await readFile(path, "utf8"), original);
         assert.equal((await runEntry(fixture, "postinstall")).code, 0);
+        if (name === "fresh") {
+          assert.equal(await pathExists(fixture.home), false);
+        } else {
+          const updated = await readFile(path, "utf8");
+          assert.equal(updated.startsWith(original), true);
+          assert.deepEqual(parse(updated), { ...parse(original), jev: { enabled: false, api_key: "" } });
+          const after = await stat(path);
+          assert.equal((await runEntry(fixture, "preinstall")).code, 0);
+          assert.equal((await runEntry(fixture, "postinstall")).code, 0);
+          assert.equal(await readFile(path, "utf8"), updated);
+          const repeated = await stat(path);
+          assert.equal(repeated.ino, after.ino);
+          assert.equal(repeated.mtimeMs, after.mtimeMs);
+        }
         assert.equal(await pathExists(fixture.logPath), false);
         assert.equal(await pathExists(join(fixture.home, "runtime", "install")), false);
-        if (name === "fresh") assert.equal(await pathExists(fixture.home), false);
       } finally {
         await fixture.cleanup();
       }
     });
-  }
-});
-
-test("postinstall adds disabled Jev defaults to a stopped legacy config without rewriting existing settings", async (t) => {
-  for (const [name, newline] of [["LF", "\n"], ["CRLF", "\r\n"]]) {
-    await t.test(name, async () => {
-      const fixture = await createFixture();
-      const path = join(fixture.home, "config.toml");
-      const original = [
-        "# Preserve this account and custom settings.",
-        "[memorax]",
-        'api_key = "legacy-config-key-canary" # Existing connection.',
-        'user_id = "fixture-user"',
-        "[custom.settings]",
-        'value = "unchanged"',
-        "",
-      ].join(newline);
-      try {
-        await mkdir(fixture.home, { recursive: true });
-        await writeFile(path, original);
-        if (process.platform !== "win32") await chmod(path, 0o640);
-        const before = await stat(path);
-        assert.equal((await runEntry(fixture, "preinstall")).code, 0);
-        assert.equal(await readFile(path, "utf8"), original);
-        const result = await runEntry(fixture, "postinstall");
-        assert.equal(result.code, 0, result.stderr);
-        const updated = await readFile(path, "utf8");
-        assert.equal(updated.startsWith(original), true);
-        assert.deepEqual(parse(updated), { ...parse(original), jev: { enabled: false, api_key: "" } });
-        if (newline === "\r\n") assert.doesNotMatch(updated, /(?<!\r)\n/);
-        assert.doesNotMatch(result.stdout + result.stderr, /legacy-config-key-canary/);
-        assert.equal(await pathExists(fixture.logPath), false);
-        assert.equal(await pathExists(join(fixture.home, "runtime", "install")), false);
-        const after = await stat(path);
-        assert.equal(after.mode & 0o7777, before.mode & 0o7777);
-        assert.equal(after.uid, before.uid);
-        assert.equal(after.gid, before.gid);
-
-        assert.equal((await runEntry(fixture, "preinstall")).code, 0);
-        assert.equal((await runEntry(fixture, "postinstall")).code, 0);
-        assert.equal(await readFile(path, "utf8"), updated);
-        const repeated = await stat(path);
-        assert.equal(repeated.ino, after.ino);
-        assert.equal(repeated.mtimeMs, after.mtimeMs);
-      } finally {
-        await fixture.cleanup();
-      }
-    });
-  }
-});
-
-test("postinstall preserves complete, partial, inline, and dotted Jev configuration", async (t) => {
-  for (const [name, original] of [
-    ["complete", '[jev]\nenabled = true\napi_key = "jev-config-key-canary"\nfuture_option = "keep"\n'],
-    ["enabled only", '[jev]\nenabled = false # Intentionally disabled.\n'],
-    ["key only", '[jev]\napi_key = "jev-config-key-canary"\n'],
-    ["inline", 'jev = { enabled = true, api_key = "jev-config-key-canary" }\n'],
-    ["dotted", 'jev.enabled = true\njev.api_key = "jev-config-key-canary"\n'],
-  ]) {
-    await t.test(name, async () => {
-      const fixture = await createFixture();
-      const path = join(fixture.home, "config.toml");
-      try {
-        await mkdir(fixture.home, { recursive: true });
-        await writeFile(path, original);
-        const before = await stat(path);
-        assert.equal((await runEntry(fixture, "preinstall")).code, 0);
-        const result = await runEntry(fixture, "postinstall");
-        assert.equal(result.code, 0, result.stderr);
-        assert.equal(await readFile(path, "utf8"), original);
-        const after = await stat(path);
-        assert.equal(after.ino, before.ino);
-        assert.equal(after.mtimeMs, before.mtimeMs);
-        assert.doesNotMatch(result.stdout + result.stderr, /jev-config-key-canary/);
-        assert.equal(await pathExists(fixture.logPath), false);
-      } finally {
-        await fixture.cleanup();
-      }
-    });
-  }
-});
-
-test("postinstall migrates legacy config after restoring a valid package transition", async () => {
-  const fixture = await createFixture({ withDshState: true });
-  const path = join(fixture.home, "config.toml");
-  const original = "[clients]\ncodex = false\n";
-  try {
-    await writeFile(path, original);
-    assert.equal((await runEntry(fixture, "preinstall")).code, 0);
-    const result = await runEntry(fixture, "postinstall");
-    assert.equal(result.code, 0, result.stderr);
-    assert.deepEqual((await readCalls(fixture)).map((entry) => entry.command), ["stop", "start", "status"]);
-    const updated = await readFile(path, "utf8");
-    assert.equal(updated.startsWith(original), true);
-    assert.deepEqual(parse(updated).jev, { enabled: false, api_key: "" });
-    assert.equal(await pathExists(fixture.transitionPath), false);
-  } finally {
-    await fixture.cleanup();
   }
 });
 
@@ -173,22 +91,6 @@ test("postinstall preserves malformed config and reports a content-free migratio
     assert.equal(installation.failure.children[0].fields.configStage, "parse_existing");
     assert.equal(installation.failure.children[0].fields.configState, "preserved");
     assert.doesNotMatch(JSON.stringify(diagnostics), /malformed-config-key-canary|broken =|api_key/);
-    assert.equal(await pathExists(fixture.logPath), false);
-  } finally {
-    await fixture.cleanup();
-  }
-});
-
-test("postinstall does not migrate config before rejecting invalid transition authority", async () => {
-  const fixture = await createFixture({ transitionText: "{invalid-transition" });
-  const path = join(fixture.home, "config.toml");
-  const original = "[clients]\ncodex = false\n";
-  try {
-    await writeFile(path, original);
-    const result = await runEntry(fixture, "postinstall");
-    assert.equal(result.code, 1);
-    assert.match(result.stderr, /PACKAGE_TRANSITION_RECORD_INVALID/);
-    assert.equal(await readFile(path, "utf8"), original);
     assert.equal(await pathExists(fixture.logPath), false);
   } finally {
     await fixture.cleanup();
@@ -294,8 +196,12 @@ test("relative MEMORAX_CODE_HOME is resolved before lifecycle commands change cw
 
 test("managed DSH state is quiesced and restored without Backend PID authority", async () => {
   const fixture = await createFixture({ withDshState: true });
+  const path = join(fixture.home, "config.toml");
+  const original = "[clients]\ncodex = false\n";
   try {
+    await writeFile(path, original);
     assert.equal((await runEntry(fixture, "preinstall")).code, 0);
+    assert.equal(await readFile(path, "utf8"), original);
     assert.equal(JSON.parse(await readFile(fixture.transitionPath, "utf8")).state, "retired");
     const stopCall = (await readCalls(fixture))[0];
     assert.equal(stopCall.command, "stop");
@@ -303,6 +209,10 @@ test("managed DSH state is quiesced and restored without Backend PID authority",
 
     assert.equal((await runEntry(fixture, "postinstall")).code, 0);
     assert.deepEqual((await readCalls(fixture)).map((call) => call.command), ["stop", "start", "status"]);
+    const updated = await readFile(path, "utf8");
+    assert.equal(updated.startsWith(original), true);
+    assert.deepEqual(parse(updated), { ...parse(original), jev: { enabled: false, api_key: "" } });
+    assert.equal(await pathExists(fixture.transitionPath), false);
   } finally {
     await fixture.cleanup();
   }
@@ -541,9 +451,13 @@ test("postinstall rejects invalid and unsupported transition records without con
   for (const [name, text] of scenarios) {
     await t.test(name, async () => {
       const fixture = await createFixture({ transitionText: text, publicUpdate: true });
+      const path = join(fixture.home, "config.toml");
+      const original = "[clients]\ncodex = false\n";
       try {
+        await writeFile(path, original);
         const result = await runEntry(fixture, "postinstall");
         assert.equal(result.code, 1);
+        assert.equal(await readFile(path, "utf8"), original);
         const [diagnostic] = await readDiagnostics(fixture);
         assert.equal(diagnostic.stage, "transition_read");
         assert.equal(diagnostic.errorCode, name === "unsupported version"

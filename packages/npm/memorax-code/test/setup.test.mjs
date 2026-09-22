@@ -884,6 +884,10 @@ test("setup update mode skips MemoraX credentials and silently trusts verified H
     "codex = true",
     "claude = false",
     "",
+    "[jev]",
+    "enabled = true # User opt-in",
+    'api_key = "configured-jev-key"',
+    "",
     "[memorax]",
     'endpoint = "https://existing-memorax.example"',
     'api_key = "existing-api-key"',
@@ -924,6 +928,9 @@ test("setup update mode skips MemoraX credentials and silently trusts verified H
     assert.match(config, /output_language = "en"/);
     assert.match(config, /claude = false/);
     assert.match(config, /codebuddy = true/);
+    assert.equal(tomlSectionText(config, "jev"), tomlSectionText(existingConfig, "jev"));
+    assert.doesNotMatch(run.result.stderr, /configured-jev-key|existing-api-key/);
+    await assertSetupComplete(run);
   } finally {
     await rm(run.root, { recursive: true, force: true });
   }
@@ -1475,24 +1482,6 @@ test("interactive setup after reinstall automatically reuses a complete MemoraX 
   }
 });
 
-
-test("update setup preserves existing Jev opt-in and API key", async () => {
-  const existingConfig = [
-    "[clients]", "codex = true", "claude = true", "dsh = false", "",
-    "[memorax]", 'endpoint = "https://memorax.example"',
-    'api_key = "existing-secret"', 'user_id = "existing-user"', "",
-    "[jev]", "enabled = true # User opt-in", 'api_key = "configured-jev-key"', "",
-  ].join("\n");
-  const run = await runSetup({ memoraxCodeConfig: existingConfig, updateMode: true });
-  try {
-    assert.equal(run.result.code, 0, run.result.stderr);
-    assert.equal(await readFile(join(run.memoraxCodeHome, "config.toml"), "utf8"), existingConfig);
-    assert.doesNotMatch(run.result.stderr, /configured-jev-key|existing-secret/);
-    await assertSetupComplete(run);
-  } finally {
-    await rm(run.root, { recursive: true, force: true });
-  }
-});
 
 test("reconfigure mode replaces a reusable MemoraX configuration", async () => {
   const existingConfig = [
