@@ -388,7 +388,8 @@ const cursorSkipReason = setupClientSkipReason({
 
 const canReuseRestoredBackend = reuseRestoredBackend
   && existingSetup
-  && sameClientSelection(selectedClients, previousClients)
+  && dshProfilesVerified
+  && sameLifecycleClientSelection(lifecycleClients, previousClients, { includeDsh: dshSelected })
   && !codexClientNewlyEnabled
   && !codexPluginRequiresActivation;
 
@@ -980,6 +981,12 @@ function writeClientSelectionConfig(clients, configuredClients = SETUP_CLIENTS) 
 
 function sameClientSelection(left, right) {
   return left.length === right.length && left.every((client, index) => client === right[index]);
+}
+
+function sameLifecycleClientSelection(currentClients, previousClients, { includeDsh = false } = {}) {
+  const current = includeDsh ? [...currentClients, "dsh"] : currentClients;
+  const previous = includeDsh ? [...previousClients, "dsh"] : previousClients;
+  return sameClientSelection(current, previous);
 }
 
 function setManagedClientSelection(text, clients, configuredClients = SETUP_CLIENTS) {

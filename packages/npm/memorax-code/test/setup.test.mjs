@@ -957,6 +957,27 @@ test("setup update reuses a restored Backend when client selection is unchanged"
   }
 });
 
+test("setup update falls back when a persisted client is no longer available", async () => {
+  const run = await runSetup({
+    codexAvailable: false,
+    claudeAvailable: false,
+    updateMode: true,
+    memoraxCodeConfig: "[clients]\ncodex = true\nclaude = false\ndsh = false\n",
+    memoraxEnv: {
+      MEMORAX_CODE_SETUP_REUSE_RESTORED_BACKEND: "1",
+    },
+  });
+  try {
+    assert.equal(run.result.code, 0, run.result.stderr);
+    assert.match(run.log, /^memorax-code start --clients none /m);
+    assert.doesNotMatch(run.result.stderr, /Reusing the Backend restored during package update/);
+    assert.equal((run.log.match(/^memorax-code status /gm) ?? []).length, 1);
+    await assertSetupComplete(run);
+  } finally {
+    await rm(run.root, { recursive: true, force: true });
+  }
+});
+
 test("setup update retains the original diagnostic when the pre-update Hook inspection fails", async () => {
   const run = await runSetup({
     existingCache: true, updateMode: true, hookSnapshotFails: true,
