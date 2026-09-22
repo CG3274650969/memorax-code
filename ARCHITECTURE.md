@@ -1164,6 +1164,8 @@ Turn's in-flight or completed judgment, including failures. Guidance requests
 must match both the presence and values of the registered native references.
 Explicit interruption or rollback notifies guidance even after writeback
 metadata expires, invalidating the matching context and any in-flight result.
+Normal generation retirement invalidates unfinished guidance immediately while
+preserving already validated completed QA for the next Turn.
 An invalidated Turn retains its replay protection; successful writeback
 consumption does not discard the completed pair needed by the next Turn.
 Validated native completion feeds

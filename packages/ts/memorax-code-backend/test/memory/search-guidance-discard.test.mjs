@@ -70,7 +70,7 @@ async function fixture(t, fetchImpl) {
 }
 
 test("standalone harness discards guidance even after metadata expiry and rejects late replays", async (t) => {
-  for (const reason of ["interrupted", "rolled_back"]) {
+  for (const reason of ["interrupted", "rolled_back", "superseded"]) {
     for (const expired of [false, true]) {
       await t.test(`${reason}, expired=${expired}`, async (t) => {
         const f = await fixture(t);
@@ -98,16 +98,33 @@ test("standalone harness discards guidance even after metadata expiry and reject
 });
 
 test("discard invalidates the result of an already running guidance request", async (t) => {
-  let release;
-  const f = await fixture(t, () => new Promise((resolve) => { release = () => resolve(answer()); }));
-  await f.start("A");
-  const pending = f.guidance.evaluate(command("A"));
-  assert.equal(typeof release, "function");
-  assert.equal(f.coordinator.discardTurn(key("A"), "interrupted"), true);
-  release();
-  assert.deepEqual(await pending, unavailable);
-  assert.deepEqual(await f.guidance.evaluate(command("A")), unavailable);
-  assert.equal(f.requests.length, 1);
+  for (const reason of ["interrupted", "rolled_back", "superseded"]) await t.test(reason, async (t) => {
+    let release;
+    const f = await fixture(t, () => new Promise((resolve) => { release = () => resolve(answer()); }));
+    await f.start("A");
+    const pending = f.guidance.evaluate(command("A"));
+    assert.equal(typeof release, "function");
+    assert.equal(f.coordinator.discardTurn(key("A"), reason), true);
+    release();
+    assert.deepEqual(await pending, unavailable);
+    assert.deepEqual(await f.guidance.evaluate(command("A")), unavailable);
+    assert.equal(f.requests.length, 1);
+  });
+});
+
+test("only normal supersession preserves completed QA after writeback consumes metadata", async (t) => {
+  for (const reason of ["interrupted", "rolled_back", "superseded"]) await t.test(reason, async (t) => {
+    const f = await fixture(t);
+    await f.start("A");
+    assert.equal((await f.complete("A")).metadataDisposition, "consumed");
+    assert.equal(f.coordinator.discardTurn(key("A"), reason), false);
+    assert.deepEqual(await f.guidance.evaluate(command("A")), unavailable);
+    await f.start("B");
+    assert.equal((await f.guidance.evaluate(command("B"))).ok, true);
+    assert.deepEqual(f.requests, [{ current_prompt: "Request B",
+      ...(reason === "superseded" ? { previous_turn: { user: "Request A", assistant: "Answer A" } } : {}),
+    }]);
+  });
 });
 
 test("completed QA survives normal consumption while discards affect only the matching current client and turn", async (t) => {

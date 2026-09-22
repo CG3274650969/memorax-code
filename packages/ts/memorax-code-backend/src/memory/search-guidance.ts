@@ -4,7 +4,7 @@ import { jevConfigFromEnv } from "../provider/jev/config.js";
 import { memoraxConfigFromEnv } from "../provider/memorax/config.js";
 import { repositoryMemoryScopesMatch, repositoryMemoryScopeCanBindGeneralWorkspace, repositoryMemoryScopeCanUpgradeFromDegradedGit, type RepositoryMemoryScope } from "../repository/scope.js";
 import type { TurnStartCommand } from "./hook-command.js";
-import type { MemoryMaterializedTurn, MemoryTurnKey, MemoryTurnState } from "./turn-coordinator.js";
+import type { MemoryMaterializedTurn, MemoryTurnDiscardReason, MemoryTurnKey, MemoryTurnState } from "./turn-coordinator.js";
 
 const MAX_RETIRED_TURN_IDS = 256;
 
@@ -84,10 +84,12 @@ export function createMemorySearchGuidanceRuntime(options: {
           ? { previousTurn: previous.completed } : {}),
       });
     },
-    discardTurn(input: MemoryTurnKey): void {
+    discardTurn(input: MemoryTurnKey, reason?: MemoryTurnDiscardReason): void {
       const key = sessionKey(input);
       const current = turns.get(key);
       if (!current || current.key.clientTurnId !== input.clientTurnId) return;
+      // Normal generation retirement preserves only already validated QA.
+      if (reason === "superseded" && current.completed) return;
       put(key, { key: current.key, invalid: true, retiredTurnIds: current.retiredTurnIds });
     },
     completeTurn(input: MemoryMaterializedTurn): void {

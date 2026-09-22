@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { readdirSync, writeFileSync } from "node:fs";
-import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createCursorMemoryHookRuntime } from "../../../dist/clients/cursor/memory-hook-runtime.js";
@@ -11,6 +11,8 @@ import { cursorTurnStatePath } from "../../../dist/clients/cursor/turn-store.js"
 import { createRepositoryMemorySessionRuntime } from "../../../dist/memory/repository-session.js";
 import { readDiagnosticHistory } from "../../../dist/lifecycle/diagnostic-history.js";
 import { createMemoryService } from "../../../dist/memory/service.js";
+import { createMemorySearchGuidanceRuntime } from "../../../dist/memory/search-guidance.js";
+import { JEV_MODEL } from "../../../dist/provider/jev/adapter.js";
 import { readCurrentTraceTurn } from "../../../dist/trace/store.js";
 import { withJsonFileLockAsync } from "../../../../memorax-code-adapter-common/src/config-utils.mjs";
 import { databaseFixture, nativeField, nativeMessage } from "./support/database-fixtures.mjs";
@@ -516,6 +518,233 @@ test("Cursor local enqueue rejection retains durable and live metadata for retry
     assert.ok(calls >= 2);
     assert.equal(acceptedWrites, 1);
   } finally { instance.close(); await f.cleanup(); }
+});
+
+test("Cursor next generation preserves completed Jev QA independently of Add acceptance or DB timing", async (t) => {
+  for (const accepted of [true, false]) for (const late of [false, true]) {
+    await t.test(`${accepted ? "accepted" : "disabled"}, ${late ? "late DB" : "completed before next start"}`, async () => {
+      const f = await fixture();
+      const requests = [];
+      const searchGuidance = createMemorySearchGuidanceRuntime({ memoraxCodeHome: f.home,
+        env: { ...f.env, MEMORAX_CODE_JEV_ENABLED: "true", MEMORAX_CODE_JEV_API_KEY: "synthetic-jev-key" },
+        fetchImpl: async (_url, init) => {
+          requests.push(JSON.parse(init.body).state);
+          return Response.json({ model: JEV_MODEL, answers: { search_needed: { type: "noul", noul: 0.9 } } });
+        },
+      });
+      const { instance } = runtime(f, { searchGuidance, databaseRetryDelayMs: 2000,
+        automaticWriteback: () => accepted ? { accepted: true } : { accepted: false, reason: "disabled" } });
+      const next = { ...f.start, turnId: randomUUID(), prompt: "Recall the earlier module boundary decision." };
+      try {
+        await instance.recordTurnStart(f.start);
+        await observeResponse(instance, f.start);
+        if (!late) await f.append();
+        const completion = await instance.writeback(stop(f.start));
+        if (late) {
+          assert.equal(completion.reason, "database_session_missing");
+          await f.append();
+        } else {
+          assert.equal(completion.scheduled, accepted);
+          if (!accepted) assert.equal(completion.reason, "disabled");
+        }
+        assert.equal((await instance.recordTurnStart(next)).recorded, true);
+        assert.equal((await searchGuidance.evaluate(next)).decision, "search");
+        assert.deepEqual(requests, [{ current_prompt: next.prompt,
+          previous_turn: { user: prompt, assistant: answer } }]);
+        assert.equal(instance.size(), 1, "retirement still removes the previous Turn's writeback metadata");
+        assert.equal((await instance.writeback(stop(f.start))).reason, "generation_replaced");
+        assert.equal((await instance.recordTurnStart(f.start)).recorded, false);
+        assert.equal((await searchGuidance.evaluate(f.start)).reason, "context_unavailable");
+      } finally { instance.close(); searchGuidance.close(); await f.cleanup(); }
+    });
+  }
+});
+
+test("Cursor replacement invalidates in-flight Jev and cannot carry older QA past an incomplete Turn", async () => {
+  const f = await fixture();
+  const requests = [];
+  let finishPending;
+  const searchGuidance = createMemorySearchGuidanceRuntime({ memoraxCodeHome: f.home,
+    env: { ...f.env, MEMORAX_CODE_JEV_ENABLED: "true", MEMORAX_CODE_JEV_API_KEY: "synthetic-jev-key" },
+    fetchImpl: async (_url, init) => {
+      requests.push(JSON.parse(init.body).state);
+      if (requests.length === 1) await new Promise((resolve) => { finishPending = resolve; });
+      return Response.json({ model: JEV_MODEL, answers: { search_needed: { type: "noul", noul: 0.9 } } });
+    },
+  });
+  const { instance } = runtime(f, { searchGuidance, databaseRetryDelayMs: 2000 });
+  const incomplete = { ...f.start, turnId: randomUUID(), prompt: "An unfinished request." };
+  const next = { ...f.start, turnId: randomUUID(), prompt: "A subsequent request." };
+  let pending;
+  try {
+    await instance.recordTurnStart(f.start); await f.append(); await observeResponse(instance, f.start);
+    assert.equal((await instance.writeback(stop(f.start))).scheduled, true);
+    await instance.recordTurnStart(incomplete);
+    pending = searchGuidance.evaluate(incomplete);
+    await until(() => Boolean(finishPending));
+    await observeResponse(instance, incomplete);
+    assert.equal((await instance.writeback(stop(incomplete))).scheduled, false);
+    assert.equal((await instance.recordTurnStart(next)).recorded, true);
+    finishPending();
+    assert.equal((await pending).reason, "context_unavailable");
+    assert.equal((await searchGuidance.evaluate(incomplete)).reason, "context_unavailable");
+    assert.equal((await searchGuidance.evaluate(next)).decision, "search");
+    assert.deepEqual(requests[1], { current_prompt: next.prompt });
+    assert.equal(instance.size(), 1);
+    f.write({ latestGenerationId: incomplete.turnId, turns: [f.native(incomplete)] });
+    assert.equal((await instance.writeback(stop(incomplete))).reason, "generation_replaced");
+    assert.equal((await instance.recordTurnStart(incomplete)).recorded, false);
+  } finally { finishPending?.(); await pending; instance.close(); searchGuidance.close(); await f.cleanup(); }
+});
+
+test("Cursor retirement invalidates unfinished Jev before the next scope lookup completes", async (t) => {
+  for (const phase of ["open", "native_content_pending"]) await t.test(phase, async () => {
+    const f = await fixture();
+    const repositoryMemorySession = createRepositoryMemorySessionRuntime();
+    let holdNextScope = false, finishPending, releaseScope, scopeStarted;
+    const scopeEntered = new Promise((resolve) => { scopeStarted = resolve; });
+    const scopeGate = new Promise((resolve) => { releaseScope = resolve; });
+    const searchGuidance = createMemorySearchGuidanceRuntime({ memoraxCodeHome: f.home,
+      env: { ...f.env, MEMORAX_CODE_JEV_ENABLED: "true", MEMORAX_CODE_JEV_API_KEY: "synthetic-jev-key" },
+      fetchImpl: async () => {
+        await new Promise((resolve) => { finishPending = resolve; });
+        return Response.json({ model: JEV_MODEL, answers: { search_needed: { type: "noul", noul: 0.9 } } });
+      },
+    });
+    const { instance } = runtime(f, { searchGuidance, databaseRetryDelayMs: 2000, repositoryMemorySession: {
+      async resolve(input) {
+        if (holdNextScope) { scopeStarted(); await scopeGate; }
+        return await repositoryMemorySession.resolve(input);
+      },
+      close() {},
+    } });
+    let pending, registration;
+    try {
+      await instance.recordTurnStart(f.start);
+      pending = searchGuidance.evaluate(f.start);
+      await until(() => Boolean(finishPending));
+      if (phase === "native_content_pending") {
+        await observeResponse(instance, f.start);
+        assert.equal((await instance.writeback(stop(f.start))).reason, "database_session_missing");
+      }
+      holdNextScope = true;
+      registration = instance.recordTurnStart({ ...f.start, turnId: randomUUID(), prompt: "Next request" });
+      await scopeEntered;
+      finishPending();
+      assert.equal((await pending).reason, "context_unavailable");
+      assert.equal((await searchGuidance.evaluate(f.start)).reason, "context_unavailable");
+      releaseScope();
+      assert.equal((await registration).recorded, true);
+    } finally {
+      finishPending?.(); releaseScope(); await pending; await registration;
+      instance.close(); searchGuidance.close(); repositoryMemorySession.close(); await f.cleanup();
+    }
+  });
+});
+
+test("Cursor blocked completion cannot pass previously materialized Jev QA to the next generation", async (t) => {
+  for (const failure of ["native_changed", "response_conflict"]) await t.test(failure, async () => {
+    const f = await fixture();
+    const requests = [];
+    const searchGuidance = createMemorySearchGuidanceRuntime({ memoraxCodeHome: f.home,
+      env: { ...f.env, MEMORAX_CODE_JEV_ENABLED: "true", MEMORAX_CODE_JEV_API_KEY: "synthetic-jev-key" },
+      fetchImpl: async (_url, init) => {
+        requests.push(JSON.parse(init.body).state);
+        return Response.json({ model: JEV_MODEL, answers: { search_needed: { type: "noul", noul: 0.9 } } });
+      },
+    });
+    const { instance } = runtime(f, { searchGuidance, databaseRetryDelayMs: 2000,
+      automaticWriteback: () => ({ accepted: false, reason: "disabled" }) });
+    try {
+      await instance.recordTurnStart(f.start); await f.append(); await observeResponse(instance, f.start);
+      assert.equal((await instance.writeback(stop(f.start))).reason, "disabled");
+      if (failure === "native_changed") {
+        f.write({ latestGenerationId: f.start.turnId, turns: [{ ...f.native(), userPrompt: "Conflicting native user content." }] });
+      } else {
+        assert.equal((await observeResponse(instance, f.start, "Conflicting response.")).reason, "conflicting_response_events");
+      }
+      const next = { ...f.start, turnId: randomUUID(), prompt: "A fresh question after the invalidated Turn." };
+      assert.equal((await instance.recordTurnStart(next)).recorded, true);
+      assert.equal((await searchGuidance.evaluate(next)).decision, "search");
+      assert.deepEqual(requests, [{ current_prompt: next.prompt }]);
+      assert.equal(instance.size(), 1);
+    } finally { instance.close(); searchGuidance.close(); await f.cleanup(); }
+  });
+});
+
+test("Cursor failed next-generation registration still invalidates retired Jev guidance", async (t) => {
+  for (const failure of ["repository_resolution", "state_publication"]) await t.test(failure, async () => {
+    const f = await fixture();
+    const repositoryMemorySession = createRepositoryMemorySessionRuntime();
+    let failNext = false, finishPending, calls = 0;
+    const searchGuidance = createMemorySearchGuidanceRuntime({ memoraxCodeHome: f.home,
+      env: { ...f.env, MEMORAX_CODE_JEV_ENABLED: "true", MEMORAX_CODE_JEV_API_KEY: "synthetic-jev-key" },
+      fetchImpl: async () => {
+        calls++;
+        await new Promise((resolve) => { finishPending = resolve; });
+        return Response.json({ model: JEV_MODEL, answers: { search_needed: { type: "noul", noul: 0.9 } } });
+      },
+    });
+    const { instance } = runtime(f, { searchGuidance, repositoryMemorySession: {
+      async resolve(input) {
+        if (failNext && failure === "repository_resolution") throw new Error("Synthetic scope lookup failure");
+        const result = await repositoryMemorySession.resolve(input);
+        if (failNext && failure === "state_publication") {
+          const statePath = cursorTurnStatePath(f.home, f.sessionId);
+          await rm(statePath);
+          await mkdir(statePath);
+        }
+        return result;
+      },
+      close() {},
+    } });
+    let pending;
+    try {
+      await instance.recordTurnStart(f.start);
+      pending = searchGuidance.evaluate(f.start);
+      await until(() => Boolean(finishPending));
+      failNext = true;
+      assert.equal((await instance.recordTurnStart({ ...f.start, turnId: randomUUID(), prompt: "Next request" })).recorded, false);
+      finishPending();
+      assert.equal((await pending).reason, "context_unavailable");
+      assert.equal((await searchGuidance.evaluate(f.start)).reason, "context_unavailable");
+      assert.equal(calls, 1);
+    } finally {
+      finishPending?.(); await pending; instance.close(); searchGuidance.close(); repositoryMemorySession.close(); await f.cleanup();
+    }
+  });
+});
+
+test("Cursor failed next-generation registration cannot pass older completed QA to a later prompt", async () => {
+  const f = await fixture();
+  const repositoryMemorySession = createRepositoryMemorySessionRuntime();
+  let failNext = false;
+  const requests = [];
+  const searchGuidance = createMemorySearchGuidanceRuntime({ memoraxCodeHome: f.home,
+    env: { ...f.env, MEMORAX_CODE_JEV_ENABLED: "true", MEMORAX_CODE_JEV_API_KEY: "synthetic-jev-key" },
+    fetchImpl: async (_url, init) => {
+      requests.push(JSON.parse(init.body).state);
+      return Response.json({ model: JEV_MODEL, answers: { search_needed: { type: "noul", noul: 0.9 } } });
+    },
+  });
+  const { instance } = runtime(f, { searchGuidance, repositoryMemorySession: {
+    async resolve(input) {
+      if (failNext) throw new Error("Synthetic scope lookup failure");
+      return await repositoryMemorySession.resolve(input);
+    },
+    close() {},
+  } });
+  try {
+    await instance.recordTurnStart(f.start); await f.append(); await observeResponse(instance, f.start);
+    assert.equal((await instance.writeback(stop(f.start))).scheduled, true);
+    failNext = true;
+    assert.equal((await instance.recordTurnStart({ ...f.start, turnId: randomUUID(), prompt: "Unregistered request" })).recorded, false);
+    failNext = false;
+    const next = { ...f.start, turnId: randomUUID(), prompt: "A later request" };
+    assert.equal((await instance.recordTurnStart(next)).recorded, true);
+    assert.equal((await searchGuidance.evaluate(next)).decision, "search");
+    assert.deepEqual(requests, [{ current_prompt: next.prompt }]);
+  } finally { instance.close(); searchGuidance.close(); repositoryMemorySession.close(); await f.cleanup(); }
 });
 
 

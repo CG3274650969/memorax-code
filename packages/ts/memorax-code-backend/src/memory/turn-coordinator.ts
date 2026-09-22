@@ -75,7 +75,7 @@ export type MemoryMaterializedTurn = Readonly<{
   assistantText: string;
 }>;
 
-export type MemoryTurnDiscardReason = "interrupted" | "rolled_back";
+export type MemoryTurnDiscardReason = "interrupted" | "rolled_back" | "superseded";
 
 export type MemoryTurnCoordinatorOptions = {
   automaticWriteback: AutomaticMemoryWritebackEnqueue;
@@ -158,7 +158,8 @@ export function createMemoryTurnCoordinator(options: MemoryTurnCoordinatorOption
     discardTurn(key, reason) {
       switch (reason) {
         case "interrupted":
-        case "rolled_back": {
+        case "rolled_back":
+        case "superseded": {
           const discarded = turns.delete(turnKey(key));
           try {
             options.onTurnDiscarded?.(key, reason);
