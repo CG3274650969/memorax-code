@@ -19,7 +19,10 @@ import {
 } from "../lib/memorax-code-adapter-common/src/memorax-defaults.mjs";
 import { resolveCodeBuddyClientSelection } from "../lib/memorax-code-codebuddy-adapter/src/config.mjs";
 import { writeSetupCompletionRecord } from "../lib/memorax-code-adapter-common/src/setup-completion.mjs";
-import { stagePackagedClientHookRuntime } from "../lib/client-hook-runtime.mjs";
+import {
+  activatePackagedClientHookRuntime,
+  stagePackagedClientHookRuntime,
+} from "../lib/client-hook-runtime.mjs";
 import { discoverDshProfiles } from "../lib/dsh-plugin-install.mjs";
 import { ensureClaudeCommandEnv } from "../lib/resolve-claude-command.mjs";
 import { ensureCodexCommandEnv } from "../lib/resolve-codex-command.mjs";
@@ -63,6 +66,7 @@ const BOLD = "\x1b[1m";
 const RESET = "\x1b[0m";
 const DSH_OPTIONAL_ENV = "MEMORAX_CODE_DSH_ADAPTER_OPTIONAL";
 const SETUP_CLIENTS = ["codex", "claude", "opencode", "codebuddy", "workbuddy", "trae", "cursor"];
+const LIFECYCLE_CLIENT_IDS = ["codex", "claude", "dsh", "opencode", "codebuddy", "workbuddy", "trae", "cursor"];
 
 const skipCodexPluginInstall = truthyEnv(process.env.MEMORAX_CODE_SKIP_CODEX_PLUGIN_INSTALL);
 const skipClaudeAdapterInstall = truthyEnv(process.env.MEMORAX_CODE_SKIP_CLAUDE_ADAPTER_INSTALL);
@@ -72,6 +76,7 @@ const skipWorkBuddyAdapterInstall = truthyEnv(process.env.MEMORAX_CODE_SKIP_WORK
 const skipTraeAdapterInstall = truthyEnv(process.env.MEMORAX_CODE_SKIP_TRAE_ADAPTER_INSTALL);
 const skipCursorAdapterInstall = truthyEnv(process.env.MEMORAX_CODE_SKIP_CURSOR_ADAPTER_INSTALL);
 const updateMode = truthyEnv(process.env.MEMORAX_CODE_SETUP_UPDATE);
+const reuseRestoredBackend = updateMode && truthyEnv(process.env.MEMORAX_CODE_SETUP_REUSE_RESTORED_BACKEND);
 const automaticUpdateMode = truthyEnv(process.env.MEMORAX_CODE_SETUP_AUTOMATIC_UPDATE);
 const setupMode = setupModeFromEnvironment(process.env.MEMORAX_CODE_SETUP_MODE);
 const nonInteractive = process.argv.includes("--non-interactive");
@@ -382,6 +387,17 @@ const cursorSkipReason = setupClientSkipReason({
   enabled: cursorClientEnabled,
 });
 
+const restoredLifecycleClients = reuseRestoredBackend && existingSetup
+  ? await readRestoredLifecycleClients()
+  : undefined;
+const canReuseRestoredBackend = reuseRestoredBackend
+  && existingSetup
+  && dshProfilesVerified
+  && sameLifecycleClientSelection(lifecycleClients, previousClients, { includeDsh: dshSelected })
+  && restoredLifecycleClientsMatch(restoredLifecycleClients, lifecycleClients, dshProfilesVerified && dshEnabledByConfig)
+  && !codexClientNewlyEnabled
+  && !codexPluginRequiresActivation;
+
 const backendAndAdapters = await startBackendAndCheck({
   skipCodexAdapter,
   clientMode,
@@ -404,6 +420,7 @@ const backendAndAdapters = await startBackendAndCheck({
   cursorAdapterRequired: cursorClientEnabled,
   traeSkipReason,
   cursorSkipReason,
+  reuseRestoredBackend: canReuseRestoredBackend,
 });
 const backendAndAdaptersStatus = backendAndAdapters.status;
 if (backendAndAdaptersStatus === "enabled") {
@@ -967,6 +984,49 @@ function writeClientSelectionConfig(clients, configuredClients = SETUP_CLIENTS) 
   });
 }
 
+function sameClientSelection(left, right) {
+  return left.length === right.length && left.every((client, index) => client === right[index]);
+}
+
+function sameLifecycleClientSelection(currentClients, previousClients, { includeDsh = false } = {}) {
+  const current = includeDsh ? [...currentClients, "dsh"] : currentClients;
+  const previous = includeDsh ? [...previousClients, "dsh"] : previousClients;
+  return sameClientSelection(current, previous);
+}
+
+// Read-only view of the Backend's active client marker. Setup consumes it to
+// decide whether update reconciliation can be skipped; the Backend keeps sole
+// authority to write it. A missing, malformed, or unreadable record denies
+// reuse instead of assuming an unchanged runtime.
+async function readRestoredLifecycleClients() {
+  const path = join(memoraxCodeHome(), "runtime", "backend", "managed-clients.json");
+  if (!existsSync(path)) return undefined;
+  let record;
+  try {
+    record = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return undefined;
+  }
+  if (!record || typeof record !== "object" || Array.isArray(record)) return undefined;
+  if (typeof record.codex !== "boolean" || typeof record.claude !== "boolean") return undefined;
+  if (LIFECYCLE_CLIENT_IDS.some((client) => (
+    record[client] !== undefined && typeof record[client] !== "boolean"
+  ))) return undefined;
+  try {
+    return await resolveCodeBuddyClientSelection(record, { memoraxCodeHome: memoraxCodeHome() });
+  } catch {
+    return undefined;
+  }
+}
+
+function restoredLifecycleClientsMatch(restoredClients, lifecycleClients, includeDsh) {
+  if (!restoredClients) return false;
+  return LIFECYCLE_CLIENT_IDS.every((client) => (
+    (restoredClients[client] === true)
+      === (client === "dsh" ? includeDsh : lifecycleClients.includes(client))
+  ));
+}
+
 function setManagedClientSelection(text, clients, configuredClients = SETUP_CLIENTS) {
   let updated = text;
   for (const client of ["opencode", "claude", "codebuddy", "workbuddy", "trae", "cursor", "codex"]) {
@@ -1370,13 +1430,41 @@ async function startBackendAndCheck({
   cursorAdapterRequired = !skipCursorAdapter,
   traeSkipReason,
   cursorSkipReason,
+  reuseRestoredBackend = false,
 } = {}) {
   const adapterFlags = clientLifecycleFlags({ clientMode });
   const startArgs = ["start", ...adapterFlags, "--json"];
   const statusArgs = ["status", ...adapterFlags];
   const optionalDshEnv = { [DSH_OPTIONAL_ENV]: "1" };
   let statusResult;
-  const result = await reconcileSetup({
+  let result;
+  if (reuseRestoredBackend) {
+    try {
+      const checked = runMemoraxCodeCommand(statusArgs, optionalDshEnv, { print: false });
+      if (checked.status === 0 && memoraxCodeEnabled(checked, {
+        codexAdapterRequired: !skipCodexAdapter,
+        claudeAdapterRequired,
+        opencodeAdapterRequired,
+        codebuddyAdapterRequired,
+        workbuddyAdapterRequired,
+        traeAdapterRequired,
+        cursorAdapterRequired,
+      })) {
+        await activatePackagedClientHookRuntime({
+          packageRoot: dirname(scriptDir),
+          memoraxCodeHome: memoraxCodeHome(),
+          generation: stagedHookRuntime,
+        });
+        statusResult = checked;
+        logGreen("Reusing the Backend restored during package update; status verified.");
+        result = { status: "enabled", reason: "restored-ready", recovered: false };
+      }
+    } catch {
+      // Fall back to the complete reconciliation below if the optimization
+      // cannot prove that the restored runtime is ready.
+    }
+  }
+  if (!result) result = await reconcileSetup({
     start: () => {
       const started = runMemoraxCodeCommand(startArgs, {
         ...pendingClientHookRuntimeEnv(),

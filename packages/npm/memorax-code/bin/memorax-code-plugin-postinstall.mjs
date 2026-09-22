@@ -25,6 +25,7 @@ try {
     memoraxCodeHome,
     expectedTransitionId: process.env.MEMORAX_CODE_PACKAGE_TRANSITION_ID?.trim() || undefined,
     retryRestore: true,
+    writeRestoreMarker: process.env.MEMORAX_CODE_PACKAGE_UPDATE_PARENT === "1",
     memoraxCodeBin: join(scriptDir, "memorax-code.mjs"),
   });
   if (result.disposition === "restored") {

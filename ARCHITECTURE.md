@@ -262,6 +262,14 @@ sequenceDiagram
   NPM->>NPM: install or replace package files
   opt successfully retired transition exists
     NPM->>Lifecycle: restore and verify managed runtime
+    opt update parent requests reuse and effective client set is unchanged
+      NPM->>Setup: pass one-shot restored marker result
+      Setup->>Lifecycle: status once for effective client set
+      Lifecycle-->>Setup: restored Backend ready
+      Setup->>Generation: activate staged Hook runtime
+    else
+      Setup->>Lifecycle: run full update reconciliation
+    end
     NPM->>Transition: consume only after successful status
   end
   opt explicit recovery after failed restoration
@@ -312,6 +320,16 @@ succeeds. Retained DSH state also triggers retirement and restoration, even
 without a live Backend PID or when that state is disabled. Fresh or stopped
 installations without retained DSH state remain stopped. npm lifecycle never
 detects new clients, accepts credentials, or authorizes Hooks.
+
+When an update parent supplies the transition identity, a successful postinstall
+also writes a private one-shot `package-restored.json` marker containing that
+identity. The update wrapper consumes the marker immediately after npm exits and
+passes only the matched boolean to setup; the marker is an optimization signal,
+not restoration authority. Setup may skip the normal lifecycle start/stop cycle
+only after a single status check proves the restored Backend and the effective
+client set are unchanged, then activates the staged Hook generation. A missing,
+unmatched, unverifiable, or consumed marker follows the complete reconciliation
+path. The marker is removed on consumption and never persists across updates.
 
 `adapter-common` owns the Jev default block and the locked atomic configuration
 writer used by npm setup/update reconciliation and postinstall. Backfill adds
