@@ -66,6 +66,7 @@ const BOLD = "\x1b[1m";
 const RESET = "\x1b[0m";
 const DSH_OPTIONAL_ENV = "MEMORAX_CODE_DSH_ADAPTER_OPTIONAL";
 const SETUP_CLIENTS = ["codex", "claude", "opencode", "codebuddy", "workbuddy", "trae", "cursor"];
+const LIFECYCLE_CLIENT_IDS = ["codex", "claude", "dsh", "opencode", "codebuddy", "workbuddy", "trae", "cursor"];
 
 const skipCodexPluginInstall = truthyEnv(process.env.MEMORAX_CODE_SKIP_CODEX_PLUGIN_INSTALL);
 const skipClaudeAdapterInstall = truthyEnv(process.env.MEMORAX_CODE_SKIP_CLAUDE_ADAPTER_INSTALL);
@@ -386,10 +387,14 @@ const cursorSkipReason = setupClientSkipReason({
   enabled: cursorClientEnabled,
 });
 
+const restoredLifecycleClients = reuseRestoredBackend && existingSetup
+  ? await readRestoredLifecycleClients()
+  : undefined;
 const canReuseRestoredBackend = reuseRestoredBackend
   && existingSetup
   && dshProfilesVerified
   && sameLifecycleClientSelection(lifecycleClients, previousClients, { includeDsh: dshSelected })
+  && restoredLifecycleClientsMatch(restoredLifecycleClients, lifecycleClients, dshProfilesVerified && dshEnabledByConfig)
   && !codexClientNewlyEnabled
   && !codexPluginRequiresActivation;
 
@@ -987,6 +992,39 @@ function sameLifecycleClientSelection(currentClients, previousClients, { include
   const current = includeDsh ? [...currentClients, "dsh"] : currentClients;
   const previous = includeDsh ? [...previousClients, "dsh"] : previousClients;
   return sameClientSelection(current, previous);
+}
+
+// Read-only view of the Backend's active client marker. Setup consumes it to
+// decide whether update reconciliation can be skipped; the Backend keeps sole
+// authority to write it. A missing, malformed, or unreadable record denies
+// reuse instead of assuming an unchanged runtime.
+async function readRestoredLifecycleClients() {
+  const path = join(memoraxCodeHome(), "runtime", "backend", "managed-clients.json");
+  if (!existsSync(path)) return undefined;
+  let record;
+  try {
+    record = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return undefined;
+  }
+  if (!record || typeof record !== "object" || Array.isArray(record)) return undefined;
+  if (typeof record.codex !== "boolean" || typeof record.claude !== "boolean") return undefined;
+  if (LIFECYCLE_CLIENT_IDS.some((client) => (
+    record[client] !== undefined && typeof record[client] !== "boolean"
+  ))) return undefined;
+  try {
+    return await resolveCodeBuddyClientSelection(record, { memoraxCodeHome: memoraxCodeHome() });
+  } catch {
+    return undefined;
+  }
+}
+
+function restoredLifecycleClientsMatch(restoredClients, lifecycleClients, includeDsh) {
+  if (!restoredClients) return false;
+  return LIFECYCLE_CLIENT_IDS.every((client) => (
+    (restoredClients[client] === true)
+      === (client === "dsh" ? includeDsh : lifecycleClients.includes(client))
+  ));
 }
 
 function setManagedClientSelection(text, clients, configuredClients = SETUP_CLIENTS) {
