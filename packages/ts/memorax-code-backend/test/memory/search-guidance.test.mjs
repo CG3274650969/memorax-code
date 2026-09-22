@@ -58,6 +58,59 @@ test("search guidance rejects mismatched native references and a changed account
   assert.equal(requests.length, 1);
 });
 
+test("concurrent and repeated guidance evaluations share one provider attempt, including failures", async (t) => {
+  const success = { ok: true, decision: "search", probability: 0.9, model: JEV_MODEL };
+  for (const scenario of [
+    { name: "success", response, expected: success },
+    { name: "HTTP failure", response: () => new Response(null, { status: 429 }), expected: { ok: false, reason: "http_error", httpStatus: 429 } },
+    { name: "transport failure", error: new Error("fixture unavailable"), expected: { ok: false, reason: "transport_error" } },
+  ]) {
+    await t.test(scenario.name, async (t) => {
+      const pendingFetches = [];
+      const { runtime } = await fixture(t, {
+        fetchImpl: () => new Promise((resolve, reject) => {
+          pendingFetches.push(() => scenario.error ? reject(scenario.error) : resolve(scenario.response()));
+        }),
+      });
+      runtime.registerTurn(turn("turn-1"), "Check historical fix");
+      const first = runtime.evaluate(command("turn-1", "Check historical fix"));
+      const duplicate = runtime.evaluate(command("turn-1", "Check historical fix"));
+      for (const finish of pendingFetches) finish();
+      assert.deepEqual(await Promise.all([first, duplicate]), [scenario.expected, scenario.expected]);
+      assert.equal(pendingFetches.length, 1, "concurrent evaluations must share the in-flight request");
+      const repeated = runtime.evaluate(command("turn-1", "Check historical fix"));
+      for (const finish of pendingFetches) finish();
+      assert.deepEqual(await repeated, scenario.expected);
+      assert.equal(pendingFetches.length, 1, "a completed provider attempt must not be retried in the same turn");
+    });
+  }
+});
+
+test("an A-B-A-B start replay reuses B's decision without a second provider request", async (t) => {
+  const { runtime, requests } = await fixture(t);
+  const first = turn("turn-A");
+  const second = turn("turn-B");
+  runtime.registerTurn(first, "First request");
+  assert.equal((await runtime.evaluate(command("turn-A", "First request"))).ok, true);
+  runtime.completeTurn({ key: first, repositoryScope: scope, userText: "First request", assistantText: "First answer" });
+  runtime.registerTurn(second, "Second request");
+  const decision = await runtime.evaluate(command("turn-B", "Second request"));
+  assert.equal(decision.ok, true);
+  assert.deepEqual(requests[1].state.previous_turn, { user: "First request", assistant: "First answer" });
+
+  runtime.registerTurn(first, "First request");
+  assert.deepEqual(await runtime.evaluate(command("turn-A", "First request")), { ok: false, reason: "context_unavailable" });
+  runtime.registerTurn(second, "Second request");
+  assert.deepEqual(await runtime.evaluate(command("turn-B", "Second request")), decision);
+  assert.equal(requests.length, 2);
+
+  runtime.completeTurn({ key: second, repositoryScope: scope, userText: "Second request", assistantText: "Second answer" });
+  runtime.registerTurn(turn("turn-C"), "Third request");
+  assert.equal((await runtime.evaluate(command("turn-C", "Third request"))).ok, true);
+  assert.equal(requests.length, 3);
+  assert.deepEqual(requests[2].state.previous_turn, { user: "Second request", assistant: "Second answer" });
+});
+
 test("search guidance discards a successful in-flight decision when its registered turn changes", async (t) => {
   let release;
   const { runtime } = await fixture(t, {

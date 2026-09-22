@@ -1159,7 +1159,8 @@ The provider does not read native history or diagnostic storage and cannot
 authorize memory operations. The memory capability owns the client- and
 session-qualified context and evaluates each eligible distinct registered user
 Turn, independently of the Skill reminder cadence. Client adapters deduplicate
-repeated native Turn events. Validated native completion feeds
+repeated native Turn events. The memory capability also reuses each registered
+Turn's in-flight or completed judgment, including failures. Validated native completion feeds
 the immediately preceding observed user/final-assistant pair before automatic Add enablement or
 enqueue acceptance; DSH exposes the final assistant message separately from
 its merged Add reply. This bounded context is in memory only, separate from

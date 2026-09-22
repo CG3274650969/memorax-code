@@ -18,6 +18,7 @@ type CachedTurn = {
   references?: NativeReferences;
   previousTurn?: PreviousTurn;
   completed?: PreviousTurn;
+  evaluation?: Promise<JevSearchResult>;
   invalid?: true;
   retiredTurnIds?: ReadonlySet<string>;
 };
@@ -115,9 +116,11 @@ export function createMemorySearchGuidanceRuntime(options: {
         || current.key.clientTurnId !== identity.clientTurnId || current.promptDigest !== digest(command.prompt)
         || !referencesMatchCommand(current.references, command)) return unavailable;
       if (!currentAccount(current.scope)) { turns.clear(); return unavailable; }
-      const result = await evaluateJevSearch({ currentPrompt: current.prompt,
+      // Retransmitted or concurrent Hook calls share even a failed provider attempt.
+      current.evaluation ??= evaluateJevSearch({ currentPrompt: current.prompt,
         ...(current.previousTurn ? { previousTurn: current.previousTurn } : {}),
       }, { env: env(), fetchImpl: options.fetchImpl });
+      const result = await current.evaluation;
       if (!configured().ok || turns.get(key) !== current || !currentAccount(current.scope)) return unavailable;
       return result;
     },
