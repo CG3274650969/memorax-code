@@ -283,6 +283,40 @@ do
   fi
 done
 
+# Upgrading a configured but stopped installation must reconcile optional
+# defaults even though no Backend restoration or foreground setup runs.
+legacy_stopped_home="$home_dir/legacy-stopped"
+node --input-type=module - "$legacy_stopped_home" <<'NODE_LEGACY_CONFIG'
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const home = process.argv[2];
+mkdirSync(home, { mode: 0o700 });
+writeFileSync(join(home, "config.toml"), [
+  "# Existing user choices must survive npm replacement.",
+  "[memorax]", 'api_key = "fixture-existing-key"', 'user_id = "fixture-user"',
+  "[memory.writeback]", "enabled = false",
+  "[custom]", 'label = "preserved"', "",
+].join("\r\n"), { mode: 0o600 });
+NODE_LEGACY_CONFIG
+cp "$legacy_stopped_home/config.toml" "$home_dir/legacy-stopped-before.toml"
+MEMORAX_CODE_HOME="$legacy_stopped_home" npm install -g --prefix "$prefix" "$main_tgz" --silent
+node --input-type=module - "$prefix" "$legacy_stopped_home" "$home_dir/legacy-stopped-before.toml" <<'NODE_LEGACY_VERIFY'
+import assert from "node:assert/strict";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
+import { join } from "node:path";
+const [prefix, home, beforePath] = process.argv.slice(2);
+const require = createRequire(join(prefix, "lib/node_modules/@memorax/memorax-code/package.json"));
+const { parse } = require("smol-toml");
+const before = readFileSync(beforePath, "utf8");
+const after = readFileSync(join(home, "config.toml"), "utf8");
+assert.ok(after.startsWith(before));
+assert.doesNotMatch(after, /(?<!\r)\n/);
+assert.deepEqual(parse(after), { ...parse(before), jev: { enabled: false, api_key: "" } });
+assert.deepEqual(readdirSync(home), ["config.toml"]);
+assert.equal(statSync(join(home, "config.toml")).mode & 0o777, 0o600);
+NODE_LEGACY_VERIFY
+
 if "$prefix/bin/memorax-code" >"$home_dir/before-setup.stdout" 2>"$home_dir/before-setup.stderr"; then
   echo "npm-package-check: no-argument CLI unexpectedly accepted incomplete setup" >&2
   exit 1
@@ -358,6 +392,7 @@ config_sections = {
 }
 assert config_sections == {
     "clients",
+    "jev",
     "memorax",
     "memory.add",
     "memory.repo_update",

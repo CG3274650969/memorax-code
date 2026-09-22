@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { parse } from "../../../ts/memorax-code-backend/node_modules/smol-toml/dist/index.js";
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const adapterCommonRoot = join(packageRoot, "..", "..", "ts", "memorax-code-adapter-common", "src");
@@ -36,10 +37,161 @@ test("fresh install and configured-but-stopped install are lifecycle no-ops", as
         assert.equal((await runEntry(fixture, "postinstall")).code, 0);
         assert.equal(await pathExists(fixture.logPath), false);
         assert.equal(await pathExists(join(fixture.home, "runtime", "install")), false);
+        if (name === "fresh") assert.equal(await pathExists(fixture.home), false);
       } finally {
         await fixture.cleanup();
       }
     });
+  }
+});
+
+test("postinstall adds disabled Jev defaults to a stopped legacy config without rewriting existing settings", async (t) => {
+  for (const [name, newline] of [["LF", "\n"], ["CRLF", "\r\n"]]) {
+    await t.test(name, async () => {
+      const fixture = await createFixture();
+      const path = join(fixture.home, "config.toml");
+      const original = [
+        "# Preserve this account and custom settings.",
+        "[memorax]",
+        'api_key = "legacy-config-key-canary" # Existing connection.',
+        'user_id = "fixture-user"',
+        "[custom.settings]",
+        'value = "unchanged"',
+        "",
+      ].join(newline);
+      try {
+        await mkdir(fixture.home, { recursive: true });
+        await writeFile(path, original);
+        if (process.platform !== "win32") await chmod(path, 0o640);
+        const before = await stat(path);
+        assert.equal((await runEntry(fixture, "preinstall")).code, 0);
+        assert.equal(await readFile(path, "utf8"), original);
+        const result = await runEntry(fixture, "postinstall");
+        assert.equal(result.code, 0, result.stderr);
+        const updated = await readFile(path, "utf8");
+        assert.equal(updated.startsWith(original), true);
+        assert.deepEqual(parse(updated), { ...parse(original), jev: { enabled: false, api_key: "" } });
+        if (newline === "\r\n") assert.doesNotMatch(updated, /(?<!\r)\n/);
+        assert.doesNotMatch(result.stdout + result.stderr, /legacy-config-key-canary/);
+        assert.equal(await pathExists(fixture.logPath), false);
+        assert.equal(await pathExists(join(fixture.home, "runtime", "install")), false);
+        const after = await stat(path);
+        assert.equal(after.mode & 0o7777, before.mode & 0o7777);
+        assert.equal(after.uid, before.uid);
+        assert.equal(after.gid, before.gid);
+
+        assert.equal((await runEntry(fixture, "preinstall")).code, 0);
+        assert.equal((await runEntry(fixture, "postinstall")).code, 0);
+        assert.equal(await readFile(path, "utf8"), updated);
+        const repeated = await stat(path);
+        assert.equal(repeated.ino, after.ino);
+        assert.equal(repeated.mtimeMs, after.mtimeMs);
+      } finally {
+        await fixture.cleanup();
+      }
+    });
+  }
+});
+
+test("postinstall preserves complete, partial, inline, and dotted Jev configuration", async (t) => {
+  for (const [name, original] of [
+    ["complete", '[jev]\nenabled = true\napi_key = "jev-config-key-canary"\nfuture_option = "keep"\n'],
+    ["enabled only", '[jev]\nenabled = false # Intentionally disabled.\n'],
+    ["key only", '[jev]\napi_key = "jev-config-key-canary"\n'],
+    ["inline", 'jev = { enabled = true, api_key = "jev-config-key-canary" }\n'],
+    ["dotted", 'jev.enabled = true\njev.api_key = "jev-config-key-canary"\n'],
+  ]) {
+    await t.test(name, async () => {
+      const fixture = await createFixture();
+      const path = join(fixture.home, "config.toml");
+      try {
+        await mkdir(fixture.home, { recursive: true });
+        await writeFile(path, original);
+        const before = await stat(path);
+        assert.equal((await runEntry(fixture, "preinstall")).code, 0);
+        const result = await runEntry(fixture, "postinstall");
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal(await readFile(path, "utf8"), original);
+        const after = await stat(path);
+        assert.equal(after.ino, before.ino);
+        assert.equal(after.mtimeMs, before.mtimeMs);
+        assert.doesNotMatch(result.stdout + result.stderr, /jev-config-key-canary/);
+        assert.equal(await pathExists(fixture.logPath), false);
+      } finally {
+        await fixture.cleanup();
+      }
+    });
+  }
+});
+
+test("postinstall migrates legacy config after restoring a valid package transition", async () => {
+  const fixture = await createFixture({ withDshState: true });
+  const path = join(fixture.home, "config.toml");
+  const original = "[clients]\ncodex = false\n";
+  try {
+    await writeFile(path, original);
+    assert.equal((await runEntry(fixture, "preinstall")).code, 0);
+    const result = await runEntry(fixture, "postinstall");
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual((await readCalls(fixture)).map((entry) => entry.command), ["stop", "start", "status"]);
+    const updated = await readFile(path, "utf8");
+    assert.equal(updated.startsWith(original), true);
+    assert.deepEqual(parse(updated).jev, { enabled: false, api_key: "" });
+    assert.equal(await pathExists(fixture.transitionPath), false);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("postinstall preserves malformed config and reports a content-free migration failure", async () => {
+  const fixture = await createFixture();
+  const path = join(fixture.home, "config.toml");
+  const original = '[memorax]\napi_key = "malformed-config-key-canary"\nbroken = [\n';
+  try {
+    await mkdir(fixture.home, { recursive: true });
+    await writeFile(path, original);
+    assert.equal((await runEntry(fixture, "preinstall")).code, 0);
+    const { runUpdateInstallWithDiagnostics } = await import(pathToFileURL(join(fixture.root, "lib", "update-diagnostics.mjs")).href);
+    let result;
+    const installation = await runUpdateInstallWithDiagnostics(async (env) => {
+      result = await runEntry({ ...fixture, env: { ...fixture.env, ...env } }, "postinstall");
+      return { exitCode: result.code, signal: null };
+    }, {});
+    assert.equal(result.code, 1);
+    assert.equal(await readFile(path, "utf8"), original);
+    assert.match(result.stderr, /INSTALL_CONFIG_MIGRATION_FAILED.*config:/);
+    assert.doesNotMatch(result.stdout + result.stderr, /malformed-config-key-canary|broken =|api_key/);
+    const diagnostics = await readDiagnostics(fixture);
+    assert.equal(diagnostics.length, 1);
+    assert.equal(diagnostics[0].errorCode, "INSTALL_CONFIG_MIGRATION_FAILED");
+    assert.equal(diagnostics[0].stage, "config");
+    assert.equal(diagnostics[0].recordReason, "invalid_toml");
+    assert.equal(diagnostics[0].configStage, "parse_existing");
+    assert.equal(diagnostics[0].configState, "preserved");
+    assert.equal(diagnostics[0].operation, "install.config");
+    assert.equal(installation.failure.children.length, 1);
+    assert.equal(installation.failure.children[0].fields.configStage, "parse_existing");
+    assert.equal(installation.failure.children[0].fields.configState, "preserved");
+    assert.doesNotMatch(JSON.stringify(diagnostics), /malformed-config-key-canary|broken =|api_key/);
+    assert.equal(await pathExists(fixture.logPath), false);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("postinstall does not migrate config before rejecting invalid transition authority", async () => {
+  const fixture = await createFixture({ transitionText: "{invalid-transition" });
+  const path = join(fixture.home, "config.toml");
+  const original = "[clients]\ncodex = false\n";
+  try {
+    await writeFile(path, original);
+    const result = await runEntry(fixture, "postinstall");
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /PACKAGE_TRANSITION_RECORD_INVALID/);
+    assert.equal(await readFile(path, "utf8"), original);
+    assert.equal(await pathExists(fixture.logPath), false);
+  } finally {
+    await fixture.cleanup();
   }
 });
 
@@ -593,11 +745,12 @@ async function createFixture({
     }
     await writeFile(target, source);
   }
-  for (const relativePath of ["config-utils.mjs", "diagnostic-record.mjs", "deployment-failure.mjs", "runtime-record.mjs", "windows-directory-retry.mjs", "package-recovery.mjs"]) {
+  for (const relativePath of ["config-utils.mjs", "diagnostic-record.mjs", "deployment-failure.mjs", "runtime-record.mjs", "windows-directory-retry.mjs", "package-recovery.mjs", "memorax-code-config-file.mjs", "jev-config-defaults.mjs"]) {
     const target = join(root, "lib", "memorax-code-adapter-common", "src", relativePath);
     await mkdir(dirname(target), { recursive: true });
     await cp(join(adapterCommonRoot, relativePath), target);
   }
+  await cp(join(packageRoot, "..", "..", "ts", "memorax-code-backend", "node_modules", "smol-toml"), join(root, "node_modules", "smol-toml"), { recursive: true });
   if (publicUpdate) {
     // Exercise the shipped update CLI and transition module against a fake lifecycle CLI.
     await cp(join(packageRoot, "bin", "memorax-code.mjs"), join(root, "bin", "update-cli.mjs"));

@@ -52,6 +52,7 @@ reminder and the adaptive repository-update policy, and
 enables content-bearing local traces for every supported client. Foreground
 setup may narrow `[clients]` to clients detected on the host. The tables below
 list all fallbacks, including tuning fields omitted from the generated file.
+Fresh setup also includes the disabled [Jev configuration](#jev-provider-configuration).
 
 On POSIX systems MemoraX Code creates `$MEMORAX_CODE_HOME` with mode `0700`
 and a new `config.toml` with mode `0600`. Windows relies on the current user's
@@ -659,11 +660,27 @@ When an adapter reports cancellation before reminder delivery, pending cadence
 and first-turn personal context can be delivered on a retry or the next eligible
 prompt. Retrying the same Turn does not advance the reminder count again.
 
+Fresh setup writes the following defaults. For an existing `config.toml`,
+setup, update reconciliation, and managed Backend start append the same block
+only when the parsed TOML root has no `jev` entry. npm postinstall also reconciles
+an existing file after package-transition handling, including upgrades while
+the Backend is stopped. Restoration uses the same Backend-start behavior.
+
 ```toml
 [jev]
 enabled = false
 api_key = ""
 ```
+
+Backfill preserves any existing `jev` definition exactly, including partial
+tables, inline tables, dotted or quoted keys, and unknown fields; it does not
+fill missing fields within an existing definition. It preserves the rest of
+the file, comments, existing line endings, and POSIX file modes, and repeated
+runs make no further changes. These writes share a configuration lock and
+atomic replacement. A fresh npm installation does not create the state home
+or `config.toml`, or start the Backend; setup creates the initial configuration.
+Installing with `--ignore-scripts` skips postinstall backfill; the next setup
+or Backend start applies it.
 
 | Field | Environment override | Fallback |
 | --- | --- | --- |
